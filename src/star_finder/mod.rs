@@ -25,10 +25,10 @@ pub struct DetectionSettings {
 impl Default for DetectionSettings {
     fn default() -> Self {
         Self {
-            sigma_threshold: 2.2,
+            sigma_threshold: 2.8,
             min_area: 2,
-            max_area: 800,
-            max_elongation: 3.2,
+            max_area: 500,
+            max_elongation: 2.5,
             mask_horizon: true,
         }
     }
@@ -88,7 +88,7 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
                 let mut mads: Vec<f64> = cell_pixels.iter().map(|p| (p - median).abs()).collect();
                 mads.sort_by(|a, b| a.partial_cmp(b).unwrap());
                 let mad = mads[mads.len() / 2];
-                let std_dev = (mad * 1.4826).max(1.2);
+                let std_dev = (mad * 1.4826).max(1.5);
 
                 let g_idx = (gy * grid_cols + gx) as usize;
                 local_means[g_idx] = median;
@@ -97,13 +97,13 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
         }
     }
 
-    // 4. Scan Image for Local Maxima Points above Local Adaptive Threshold
+    // 4. Scan Image for Point-Source Stars using Peak Sharpness & PSF Profile Validation
     let mut stars = Vec::new();
     let mut rejected_blobs = 0;
 
-    for y in 1..(effective_height - 1) {
+    for y in 2..(effective_height - 2) {
         let gy = (y / cell_h).min(grid_rows - 1);
-        for x in 1..(width - 1) {
+        for x in 2..(width - 2) {
             let gx = (x / cell_w).min(grid_cols - 1);
             let g_idx = (gy * grid_cols + gx) as usize;
             let bg_m = local_means[g_idx];
@@ -112,17 +112,48 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
             let local_threshold = bg_m + settings.sigma_threshold * bg_s;
             let val = img.get_pixel(x, y)[0] as f64;
 
-            // Check if (x, y) is a local 3x3 maximum above adaptive threshold
+            // Absolute minimum peak brightness above local background
+            if (val - bg_m) < 6.0 {
+                continue;
+            }
+
+            // Check strict 3x3 local maximum
             if val >= local_threshold
-                && val >= img.get_pixel(x - 1, y)[0] as f64
-                && val >= img.get_pixel(x + 1, y)[0] as f64
-                && val >= img.get_pixel(x, y - 1)[0] as f64
-                && val >= img.get_pixel(x, y + 1)[0] as f64
+                && val > img.get_pixel(x - 1, y)[0] as f64
+                && val > img.get_pixel(x + 1, y)[0] as f64
+                && val > img.get_pixel(x, y - 1)[0] as f64
+                && val > img.get_pixel(x, y + 1)[0] as f64
                 && val >= img.get_pixel(x - 1, y - 1)[0] as f64
                 && val >= img.get_pixel(x + 1, y - 1)[0] as f64
                 && val >= img.get_pixel(x - 1, y + 1)[0] as f64
                 && val >= img.get_pixel(x + 1, y + 1)[0] as f64
             {
+                // Calculate 3x3 Surrounding Average for Point Source Sharpness Filter
+                let mut surround_sum = 0.0;
+                let mut surround_count = 0.0;
+
+                for ny in (y - 1)..=(y + 1) {
+                    for nx in (x - 1)..=(x + 1) {
+                        if nx != x || ny != y {
+                            surround_sum += img.get_pixel(nx, ny)[0] as f64;
+                            surround_count += 1.0;
+                        }
+                    }
+                }
+
+                let surround_avg = surround_sum / surround_count;
+                let peak_signal = val - bg_m;
+                let surround_signal = (surround_avg - bg_m).max(0.1);
+
+                // PSF Sharpness Test: A star peak must be significantly brighter than surrounding pixels
+                let sharpness_ratio = peak_signal / surround_signal;
+
+                // Terrestrial foliage texture or flat car reflections have sharpness_ratio ~ 1.0
+                if sharpness_ratio < 1.18 {
+                    rejected_blobs += 1;
+                    continue;
+                }
+
                 // Sub-pixel 3x3 Centroid (Barycenter) calculation
                 let mut sum_i = 0.0;
                 let mut sum_x = 0.0;
@@ -168,9 +199,10 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
                     let lambda2 = ((mu_xx + mu_yy - delta) / 2.0).max(1e-4);
                     let elongation = (lambda1 / lambda2).sqrt();
 
+                    // Reject non-circular terrestrial highlights / foliage edges
                     if elongation <= settings.max_elongation {
                         let fwhm = 2.355 * (lambda1 + lambda2).sqrt() / std::f64::consts::SQRT_2;
-                        let snr = (val - bg_m) / bg_s.max(1.0);
+                        let snr = peak_signal / bg_s.max(1.0);
 
                         stars.push(DetectedStar {
                             id: stars.len() + 1,
@@ -199,30 +231,37 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
     }
 }
 
-// Detect landscape horizon by analyzing vertical intensity gradient variance from bottom up
+// Detect landscape horizon by analyzing vertical intensity gradient variance & edge texture from bottom up
 fn detect_horizon_y(img: &GrayImage) -> Option<u32> {
     let (width, height) = img.dimensions();
     if height < 100 {
         return None;
     }
 
-    let start_y = (height as f64 * 0.5) as u32;
+    let start_y = (height as f64 * 0.4) as u32;
 
     for y in (start_y..height - 10).rev() {
         let mut row_sum = 0.0;
         let mut row_sq_sum = 0.0;
+        let mut edge_sum = 0.0;
 
-        for x in (0..width).step_by(5) {
+        for x in (5..width - 5).step_by(4) {
             let val = img.get_pixel(x, y)[0] as f64;
+            let val_above = img.get_pixel(x, y - 2)[0] as f64;
+            let diff = (val - val_above).abs();
+
             row_sum += val;
             row_sq_sum += val * val;
+            edge_sum += diff;
         }
 
-        let count = (width / 5) as f64;
+        let count = ((width - 10) / 4) as f64;
         let mean = row_sum / count;
         let variance = (row_sq_sum / count) - (mean * mean);
+        let avg_edge = edge_sum / count;
 
-        if mean > 40.0 && variance > 200.0 {
+        // Ground landscape (trees, cars, buildings) has structured edge variance or high brightness
+        if (mean > 32.0 && variance > 110.0) || avg_edge > 12.0 {
             return Some(y);
         }
     }
