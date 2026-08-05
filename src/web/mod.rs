@@ -232,11 +232,11 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
         }
 
         .container {
-            max-width: 1550px;
+            max-width: 1600px;
             margin: 1.5rem auto;
             padding: 0 1.5rem;
             display: grid;
-            grid-template-columns: 2.3fr 1fr;
+            grid-template-columns: 2.1fr 1fr;
             gap: 1.5rem;
         }
 
@@ -343,27 +343,63 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
             z-index: 10;
         }
 
+        /* Nav Tabs for Right Dashboard Panel */
+        .tab-buttons {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            overflow-x: auto;
+        }
+
+        .tab-btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid transparent;
+            color: var(--text-muted);
+            padding: 0.5rem 0.8rem;
+            border-radius: 6px 6px 0 0;
+            font-weight: 600;
+            font-size: 0.82rem;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .tab-btn.active {
+            background: var(--card-bg);
+            color: var(--accent-blue);
+            border-color: var(--border-color) var(--border-color) transparent var(--border-color);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
         .metrics-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
-            gap: 1rem;
+            gap: 0.8rem;
+            margin-bottom: 1rem;
         }
 
         .metric-box {
             background: rgba(255, 255, 255, 0.03);
             border: 1px solid var(--border-color);
             border-radius: 8px;
-            padding: 0.8rem;
+            padding: 0.7rem;
         }
 
         .metric-title {
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             color: var(--text-muted);
             text-transform: uppercase;
         }
 
         .metric-value {
-            font-size: 1.3rem;
+            font-size: 1.2rem;
             font-weight: bold;
             color: var(--accent-green);
             margin-top: 4px;
@@ -394,6 +430,40 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
             background: rgba(56, 189, 248, 0.05);
         }
 
+        table.data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82rem;
+            margin-top: 0.5rem;
+        }
+
+        table.data-table th, table.data-table td {
+            padding: 0.5rem;
+            text-align: left;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        table.data-table th {
+            color: var(--accent-purple);
+            font-weight: 600;
+        }
+
+        .progress-bar-bg {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            height: 10px;
+            width: 100%;
+            overflow: hidden;
+            margin-top: 6px;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4ade80, #38bdf8);
+            border-radius: 6px;
+            transition: width 0.3s;
+        }
+
         ul {
             list-style: none;
             padding: 0;
@@ -401,9 +471,9 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
         }
 
         li {
-            padding: 0.5rem 0;
+            padding: 0.45rem 0;
             border-bottom: 1px solid rgba(255,255,255,0.05);
-            font-size: 0.88rem;
+            font-size: 0.85rem;
         }
 
         .badge-err {
@@ -465,7 +535,7 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
             </div>
         </div>
 
-        <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+        <div style="display: flex; flex-direction: column; gap: 1.2rem;">
             <div class="card">
                 <h2>Upload Image File</h2>
                 <div class="upload-area">
@@ -476,32 +546,87 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
             </div>
 
             <div class="card">
-                <h2>Analysis Summary</h2>
-                <div class="metrics-grid">
-                    <div class="metric-box">
-                        <div class="metric-title">Stars Detected</div>
-                        <div class="metric-value" id="valStars">0</div>
+                <div class="tab-buttons">
+                    <button class="tab-btn active" onclick="switchDashboardTab(0)">📊 Overview</button>
+                    <button class="tab-btn" onclick="switchDashboardTab(1)">🎯 Catalog</button>
+                    <button class="tab-btn" onclick="switchDashboardTab(2)">📷 EXIF Drift</button>
+                    <button class="tab-btn" onclick="switchDashboardTab(3)">🔬 Aberration</button>
+                    <button class="tab-btn" onclick="switchDashboardTab(4)">🛰️ Satellites</button>
+                </div>
+
+                <!-- Tab 0: Overview -->
+                <div class="tab-content active" id="tabOverview">
+                    <div class="metrics-grid">
+                        <div class="metric-box">
+                            <div class="metric-title">Stars Detected</div>
+                            <div class="metric-value" id="valStars">0</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-title">Plate Solve Status</div>
+                            <div class="metric-value" id="valSolved" style="color: var(--accent-yellow);">Checking</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-title">RMS Residual Error</div>
+                            <div class="metric-value" id="valRmse">0.0 px</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-title">Optical Quality Index</div>
+                            <div class="metric-value" id="valQuality">0 / 100</div>
+                        </div>
                     </div>
-                    <div class="metric-box">
-                        <div class="metric-title">Plate Solve Status</div>
-                        <div class="metric-value" id="valSolved" style="color: var(--accent-yellow);">Checking</div>
+
+                    <div style="margin-top: 0.8rem;">
+                        <label style="font-size: 0.8rem; color: var(--text-muted);">Optical Health Score Gauge:</label>
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" id="qualityGaugeBar" style="width: 0%;"></div>
+                        </div>
                     </div>
-                    <div class="metric-box">
-                        <div class="metric-title">RMS Residual Error</div>
-                        <div class="metric-value" id="valRmse">0.0 px</div>
-                    </div>
-                    <div class="metric-box">
-                        <div class="metric-title">Optical Quality</div>
-                        <div class="metric-value" id="valQuality">0 / 100</div>
+
+                    <ul id="overviewList" style="margin-top: 0.8rem;">
+                        <li>Loading execution details...</li>
+                    </ul>
+                </div>
+
+                <!-- Tab 1: Solved Catalog Table -->
+                <div class="tab-content" id="tabCatalog">
+                    <div style="max-height: 380px; overflow-y: auto;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Catalog Star</th>
+                                    <th>RA (°)</th>
+                                    <th>Dec (°)</th>
+                                    <th>Mag</th>
+                                    <th>Residual</th>
+                                </tr>
+                            </thead>
+                            <tbody id="catalogTableBody">
+                                <tr><td colspan="5">No catalog data available</td></tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
-            </div>
 
-            <div class="card">
-                <h2>EXIF Validation & Optical Error Metrics</h2>
-                <ul id="detailsList">
-                    <li>Loading initial dataset...</li>
-                </ul>
+                <!-- Tab 2: EXIF & Astrometric Drift -->
+                <div class="tab-content" id="tabExif">
+                    <ul id="exifList">
+                        <li>No EXIF metadata parsed</li>
+                    </ul>
+                </div>
+
+                <!-- Tab 3: Aberration & Refraction -->
+                <div class="tab-content" id="tabAberration">
+                    <ul id="aberrationList">
+                        <li>No aberration data available</li>
+                    </ul>
+                </div>
+
+                <!-- Tab 4: Satellites & SGP4 Orbit -->
+                <div class="tab-content" id="tabSatellites">
+                    <ul id="satellitesList">
+                        <li>No satellite tracking data</li>
+                    </ul>
+                </div>
             </div>
         </div>
     </div>
@@ -509,8 +634,6 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
     <script>
         let currentData = null;
         let currentImg = null;
-
-        // Source tracking: 'sample' or 'file'
         let currentSource = 'sample';
         let currentFile = null;
 
@@ -521,6 +644,21 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
         let isDragging = false;
         let startX = 0;
         let startY = 0;
+
+        function switchDashboardTab(idx) {
+            const btns = document.querySelectorAll('.tab-btn');
+            const contents = document.querySelectorAll('.tab-content');
+
+            btns.forEach((btn, i) => {
+                if (i === idx) btn.classList.add('active');
+                else btn.classList.remove('active');
+            });
+
+            contents.forEach((cnt, i) => {
+                if (i === idx) cnt.classList.add('active');
+                else cnt.classList.remove('active');
+            });
+        }
 
         async function loadSampleData() {
             currentSource = 'sample';
@@ -565,25 +703,91 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
         function processLoadedData() {
             if (!currentData) return;
 
-            document.getElementById('valStars').innerText = currentData.detection.stars.length;
-            document.getElementById('valSolved').innerText = currentData.solution.solved ? "SOLVED" : "UNSOLVED";
-            document.getElementById('valRmse').innerText = currentData.solution.rmse_pixels.toFixed(2) + " px";
-            document.getElementById('valQuality').innerText = currentData.aberration.quality_score.toFixed(1) + " / 100";
-
+            const starCount = currentData.detection.stars.length;
             const rmse = currentData.solution.rmse_pixels;
+            const quality = currentData.aberration.quality_score;
+
+            document.getElementById('valStars').innerText = starCount;
+            document.getElementById('valSolved').innerText = currentData.solution.solved ? "SOLVED" : "UNSOLVED";
+            document.getElementById('valRmse').innerText = rmse.toFixed(2) + " px";
+            document.getElementById('valQuality').innerText = quality.toFixed(1) + " / 100";
+
+            document.getElementById('qualityGaugeBar').style.width = Math.min(100, Math.max(0, quality)).toFixed(0) + '%';
+
             const badgeClass = rmse < 3.0 ? 'badge-green' : (rmse < 8.0 ? 'badge-yellow' : 'badge-red');
 
-            const list = document.getElementById('detailsList');
-            list.innerHTML = `
+            // 1. Overview List
+            document.getElementById('overviewList').innerHTML = `
                 <li><b>Image Name:</b> ${currentData.image_name} (${currentData.width}x${currentData.height} px)</li>
                 <li><b>Camera Model:</b> ${currentData.exif.make || 'Apple'} ${currentData.exif.model || 'iPhone'}</li>
-                <li><b>Focal Length:</b> ${currentData.exif.focal_length_in_35mm || 26} mm equiv</li>
-                <li><b>RMS Residual Error:</b> <span class="badge-err ${badgeClass}">${rmse.toFixed(2)} px</span></li>
-                <li><b>EXIF Status:</b> ${currentData.validation.summary}</li>
-                <li><b>Radial Distortion (k1):</b> ${currentData.aberration.radial_k1.toFixed(6)}</li>
-                <li><b>Atmospheric Refraction:</b> ${currentData.aberration.atmospheric_refraction_arcmin.toFixed(2)} arcmin</li>
-                <li><b>Satellites Tracked:</b> ${currentData.satellite_report.streaks.length}</li>
+                <li><b>Horizon Boundary:</b> ${currentData.detection.horizon_y ? 'y = ' + currentData.detection.horizon_y + ' px' : 'None'}</li>
+                <li><b>Catalog Matches:</b> ${currentData.solution.matches.length} stars</li>
+                <li><b>Residual Status:</b> <span class="badge-err ${badgeClass}">${rmse.toFixed(2)} px</span></li>
             `;
+
+            // 2. Catalog Table
+            const catBody = document.getElementById('catalogTableBody');
+            if (currentData.solution.matches.length > 0) {
+                catBody.innerHTML = currentData.solution.matches.map(m => {
+                    const err = m.residual_pixels;
+                    const badge = err < 3.0 ? 'badge-green' : (err < 8.0 ? 'badge-yellow' : 'badge-red');
+                    return `
+                        <tr>
+                            <td><b>${m.catalog_name}</b></td>
+                            <td>${m.catalog_ra.toFixed(2)}°</td>
+                            <td>${m.catalog_dec.toFixed(2)}°</td>
+                            <td>${m.catalog_vmag.toFixed(2)}</td>
+                            <td><span class="badge-err ${badge}">${err.toFixed(2)} px</span></td>
+                        </tr>
+                    `;
+                }).join('');
+            } else {
+                catBody.innerHTML = '<tr><td colspan="5">No matched catalog stars</td></tr>';
+            }
+
+            // 3. EXIF & Validation List
+            document.getElementById('exifList').innerHTML = `
+                <li><b>Latitude:</b> ${currentData.exif.latitude ? currentData.exif.latitude.toFixed(6) + '°' : 'N/A'}</li>
+                <li><b>Longitude:</b> ${currentData.exif.longitude ? currentData.exif.longitude.toFixed(6) + '°' : 'N/A'}</li>
+                <li><b>Altitude:</b> ${currentData.exif.altitude ? currentData.exif.altitude.toFixed(1) + ' m' : 'N/A'}</li>
+                <li><b>Compass Heading:</b> ${currentData.exif.heading_deg ? currentData.exif.heading_deg.toFixed(1) + '°' : '180.0°'}</li>
+                <li><b>Focal Length:</b> ${currentData.exif.focal_length_in_35mm || 26} mm equiv</li>
+                <li><b>ISO & Exposure:</b> ISO ${currentData.exif.iso || 1600}, t = ${currentData.exif.exposure_time ? currentData.exif.exposure_time.toFixed(3) + 's' : 'N/A'}</li>
+                <li><b>Time Drift Offset:</b> ${currentData.validation.time_drift_seconds.toFixed(1)} s</li>
+                <li><b>Heading Adjustment:</b> ${currentData.validation.heading_error_deg.toFixed(2)}°</li>
+                <li><b>Validation Status:</b> ${currentData.validation.summary}</li>
+            `;
+
+            // 4. Aberration & Refraction List
+            document.getElementById('aberrationList').innerHTML = `
+                <li><b>Radial Distortion (k1):</b> ${currentData.aberration.radial_k1.toFixed(6)}</li>
+                <li><b>Radial Distortion (k2):</b> ${currentData.aberration.radial_k2.toFixed(6)}</li>
+                <li><b>Coma Factor:</b> ${currentData.aberration.coma_factor.toFixed(4)}</li>
+                <li><b>Astigmatism Factor:</b> ${currentData.aberration.astigmatism_factor.toFixed(4)}</li>
+                <li><b>Chromatic Aberration:</b> ${currentData.aberration.chromatic_aberration_px.toFixed(2)} px</li>
+                <li><b>Atmospheric Refraction:</b> ${currentData.aberration.atmospheric_refraction_arcmin.toFixed(2)} arcmin</li>
+                <li><b>Max Radial Shift:</b> ${currentData.aberration.max_radial_distortion_px.toFixed(1)} px</li>
+                <li><b>Quality Health Score:</b> ${currentData.aberration.quality_score.toFixed(1)} / 100</li>
+            `;
+
+            // 5. Satellites & SGP4 List
+            const satList = document.getElementById('satellitesList');
+            let satHtml = '';
+            if (currentData.satellite_report.streaks.length > 0) {
+                satHtml += currentData.satellite_report.streaks.map(s =>
+                    `<li><b>Streak #${s.id}:</b> Length = ${s.length_px.toFixed(1)} px, Angle = ${s.angle_deg.toFixed(1)}°, Brightness = ${s.brightness.toFixed(1)}</li>`
+                ).join('');
+            } else {
+                satHtml += '<li>No linear satellite streaks detected</li>';
+            }
+
+            if (currentData.satellite_report.matches.length > 0) {
+                satHtml += currentData.satellite_report.matches.map(m =>
+                    `<li><b>Matched Orbit:</b> ${m.name} (NORAD ${m.norad_id}) — Conf: ${(m.confidence * 100).toFixed(0)}%<br>` +
+                    `<small style="color:var(--text-muted);">Position: X=${m.position_km[0].toFixed(1)} km, Y=${m.position_km[1].toFixed(1)} km, Z=${m.position_km[2].toFixed(1)} km</small></li>`
+                ).join('');
+            }
+            satList.innerHTML = satHtml;
 
             if (currentData.image_data_url) {
                 currentImg = new Image();
@@ -673,7 +877,6 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.save();
 
-            // Apply Pan & Zoom Transformation
             ctx.translate(panX, panY);
             ctx.scale(scale, scale);
 
@@ -684,7 +887,6 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
             const showGrid = document.getElementById('chkGrid').checked;
             const showSatellites = document.getElementById('chkSatellites').checked;
 
-            // 1. Render Background Image or Dark Sky
             if (showImg && currentImg && currentImg.complete) {
                 ctx.drawImage(currentImg, 0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = 'rgba(11, 15, 25, 0.12)';
@@ -694,7 +896,6 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
             }
 
-            // 2. Render Lens Distortion Grid
             if (showGrid) {
                 const cx = canvas.width / 2;
                 const cy = canvas.height / 2;
@@ -728,7 +929,6 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
                 ctx.setLineDash([]);
             }
 
-            // 3. Render Ground Horizon Mask
             if (showSatellites && currentData.detection.horizon_y) {
                 const hy = currentData.detection.horizon_y;
                 ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
@@ -744,7 +944,6 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
                 ctx.setLineDash([]);
             }
 
-            // 4. Render Located Stars
             if (showStars) {
                 currentData.detection.stars.forEach(star => {
                     ctx.fillStyle = '#facc15';
@@ -767,7 +966,6 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
                 });
             }
 
-            // 5. Render Solved Catalog Overlay & Error Vectors
             if (showCatalog) {
                 currentData.solution.matches.forEach(m => {
                     const err = m.residual_pixels;
@@ -812,7 +1010,6 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
                 });
             }
 
-            // 6. Render Satellite Streaks
             if (showSatellites) {
                 currentData.satellite_report.streaks.forEach(s => {
                     ctx.strokeStyle = '#38bdf8';
