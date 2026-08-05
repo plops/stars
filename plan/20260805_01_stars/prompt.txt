@@ -1,11 +1,12 @@
 du arbeitest im auftrag von wol pumba (wolpumba@gmail.com)
 quellcode findest du in /workspace/src
 
+ich moechte ein tool bauen das typische iphone bilder  (oder sequenzen) einliest und sterne erkennt (waehrend anderer bildinhalt die sternerkennung nicht durcheinanderbringen sollten). die positionen bestimmt. wenn moeglich aberration der kamera (und atmosphaere) ermittelt. eingebettete daten (uhrzeit, gps, richtung) sollen zuhilfegenommen und validiert werden. eine tui binary reicht mir, eine webseite waer auch cool.
 
 
 nutze tools um konsistenten und aufgeraeumten quellcode zu gewaehrleisten (siehe  /workspace/src/rs-summarizer/.kiro/skills/cargo-workflow/SKILL.md)
 
-schaue dir research.md an mit ersten untersuchungen und recherchen zu m thema.
+schaue dir research.md und research-exif.md an mit ersten untersuchungen und recherchen zu m thema.
 
 Schaue dir den Quellcode an  (falls vorhanden) und die Architektur der dependencies und Software. Nutze deepwiki mcp um dokumentation zu bekommen und fragen beantworten zu lassen. falls abhaengigkeiten eingefuehrt werden sind diese mitsamt ihrer github organisation in deps.md aufzuschreiben, so dass wir spaeter einfach die deepwiki abfragen konstruieren koennen. nutze rust tools um auf die neueste vorhandene version zu switchen (auch wenn vor kompatibilitaet gewarnt wird, wenn wir gerade eine dependency einfuehren ist es wichtig, die neueste version zu nehmen, siehe cargo-workflow skill) und schon vorab usage examples in den plan aufzunehmen (mit deepwiki mcp zu erfragen)
 
