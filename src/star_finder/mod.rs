@@ -25,10 +25,10 @@ pub struct DetectionSettings {
 impl Default for DetectionSettings {
     fn default() -> Self {
         Self {
-            sigma_threshold: 4.0,
-            min_area: 3,
-            max_area: 400,
-            max_elongation: 2.2,
+            sigma_threshold: 2.2,
+            min_area: 2,
+            max_area: 500,
+            max_elongation: 3.0,
             mask_horizon: true,
         }
     }

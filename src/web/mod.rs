@@ -8,7 +8,7 @@ use crate::validation::{validate_exif, ExifValidationReport};
 
 use anyhow::Result;
 use axum::{
-    extract::Multipart,
+    extract::{Multipart, Query},
     response::{Html, IntoResponse, Json},
     routing::{get, post},
     Router,
@@ -23,6 +23,11 @@ use tokio::net::TcpListener;
 
 #[derive(Clone)]
 pub struct AppState {}
+
+#[derive(Deserialize)]
+pub struct SampleQuery {
+    pub sigma: Option<f64>,
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct AnalysisPipelineResult {
@@ -61,16 +66,21 @@ async fn get_catalog() -> Json<Vec<CatalogStar>> {
     Json(get_bright_star_catalog())
 }
 
-async fn get_sample_analysis() -> Json<AnalysisPipelineResult> {
+async fn get_sample_analysis(Query(query): Query<SampleQuery>) -> Json<AnalysisPipelineResult> {
     let opts = SyntheticOptions::default();
     let loaded = generate_synthetic_image(&opts);
-    let result = run_full_pipeline(&loaded);
+    let sigma = query.sigma.unwrap_or(2.2);
+    let result = run_full_pipeline_with_sigma(&loaded, sigma);
     Json(result)
 }
 
-async fn upload_and_analyze(mut multipart: Multipart) -> impl IntoResponse {
+async fn upload_and_analyze(
+    Query(query): Query<SampleQuery>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
     let mut file_bytes = Vec::new();
     let mut filename = "uploaded.jpg".to_string();
+    let sigma = query.sigma.unwrap_or(2.2);
 
     while let Ok(Some(field)) = multipart.next_field().await {
         if let Some(name) = field.file_name() {
@@ -84,7 +94,7 @@ async fn upload_and_analyze(mut multipart: Multipart) -> impl IntoResponse {
     if file_bytes.is_empty() {
         let opts = SyntheticOptions::default();
         let loaded = generate_synthetic_image(&opts);
-        return Json(run_full_pipeline(&loaded));
+        return Json(run_full_pipeline_with_sigma(&loaded, sigma));
     }
 
     let loaded = match load_image_from_bytes(&filename, &file_bytes) {
@@ -95,7 +105,7 @@ async fn upload_and_analyze(mut multipart: Multipart) -> impl IntoResponse {
         }
     };
 
-    Json(run_full_pipeline(&loaded))
+    Json(run_full_pipeline_with_sigma(&loaded, sigma))
 }
 
 pub fn encode_image_data_url(loaded: &crate::image_loader::LoadedImage) -> String {
@@ -109,7 +119,18 @@ pub fn encode_image_data_url(loaded: &crate::image_loader::LoadedImage) -> Strin
 }
 
 pub fn run_full_pipeline(loaded: &crate::image_loader::LoadedImage) -> AnalysisPipelineResult {
-    let settings = DetectionSettings::default();
+    run_full_pipeline_with_sigma(loaded, 2.2)
+}
+
+pub fn run_full_pipeline_with_sigma(
+    loaded: &crate::image_loader::LoadedImage,
+    sigma: f64,
+) -> AnalysisPipelineResult {
+    let settings = DetectionSettings {
+        sigma_threshold: sigma,
+        ..Default::default()
+    };
+
     let detection = detect_stars(&loaded.gray, &settings);
 
     let lat = loaded.exif.latitude.unwrap_or(48.137);
@@ -211,11 +232,11 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
         }
 
         .container {
-            max-width: 1500px;
+            max-width: 1550px;
             margin: 1.5rem auto;
             padding: 0 1.5rem;
             display: grid;
-            grid-template-columns: 2.2fr 1fr;
+            grid-template-columns: 2.3fr 1fr;
             gap: 1.5rem;
         }
 
@@ -234,11 +255,16 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
             color: var(--accent-purple);
             border-bottom: 1px solid var(--border-color);
             padding-bottom: 0.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
 
         .controls-bar {
             display: flex;
             flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
             gap: 1rem;
             background: rgba(15, 23, 42, 0.6);
             padding: 0.8rem 1rem;
@@ -246,6 +272,13 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
             margin-bottom: 1rem;
             border: 1px solid var(--border-color);
             font-size: 0.85rem;
+        }
+
+        .controls-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-items: center;
         }
 
         .controls-bar label {
@@ -263,12 +296,51 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
             border-radius: 8px;
             overflow: hidden;
             border: 1px solid var(--border-color);
+            cursor: grab;
+        }
+
+        .canvas-container:active {
+            cursor: grabbing;
         }
 
         canvas {
             display: block;
             width: 100%;
             height: auto;
+        }
+
+        .zoom-toolbar {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            display: flex;
+            gap: 6px;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(8px);
+            padding: 6px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            z-index: 10;
+        }
+
+        .zoom-toolbar button {
+            padding: 0.3rem 0.6rem;
+            font-size: 0.85rem;
+        }
+
+        .hud-overlay {
+            position: absolute;
+            bottom: 12px;
+            left: 12px;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(8px);
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            font-size: 0.78rem;
+            color: var(--accent-blue);
+            pointer-events: none;
+            z-index: 10;
         }
 
         .metrics-grid {
@@ -344,6 +416,11 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
         .badge-green { background: rgba(74, 222, 128, 0.2); color: var(--accent-green); }
         .badge-yellow { background: rgba(250, 204, 21, 0.2); color: var(--accent-yellow); }
         .badge-red { background: rgba(248, 113, 113, 0.2); color: var(--accent-red); }
+
+        input[type=range] {
+            accent-color: var(--accent-blue);
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -356,17 +433,34 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
 
     <div class="container">
         <div class="card">
-            <h2>Interactive Astrophotography Canvas (Stars & Error Overlays)</h2>
+            <h2>
+                Interactive Celestial Map (Scroll Wheel to Zoom | Click & Drag to Pan)
+                <span id="zoomDisplay" style="font-size:0.85rem; color: var(--accent-blue);">Zoom: 100%</span>
+            </h2>
+
             <div class="controls-bar">
-                <label><input type="checkbox" id="chkImage" checked onchange="redrawCanvas()"> 📷 Original Image Background</label>
-                <label><input type="checkbox" id="chkStars" checked onchange="redrawCanvas()"> ⭐ Detected Stars</label>
-                <label><input type="checkbox" id="chkCatalog" checked onchange="redrawCanvas()"> 🎯 Catalog Solved Overlay</label>
-                <label><input type="checkbox" id="chkErrorVectors" checked onchange="redrawCanvas()"> 📐 Residual Error Vectors</label>
-                <label><input type="checkbox" id="chkGrid" checked onchange="redrawCanvas()"> 🌐 Lens Distortion Grid (k1)</label>
-                <label><input type="checkbox" id="chkSatellites" checked onchange="redrawCanvas()"> 🛰️ Satellites & Horizon</label>
+                <div class="controls-group">
+                    <label><input type="checkbox" id="chkImage" checked onchange="redrawCanvas()"> 📷 Background</label>
+                    <label><input type="checkbox" id="chkStars" checked onchange="redrawCanvas()"> ⭐ Stars</label>
+                    <label><input type="checkbox" id="chkCatalog" checked onchange="redrawCanvas()"> 🎯 Catalog</label>
+                    <label><input type="checkbox" id="chkErrorVectors" checked onchange="redrawCanvas()"> 📐 Errors</label>
+                    <label><input type="checkbox" id="chkGrid" checked onchange="redrawCanvas()"> 🌐 Grid</label>
+                    <label><input type="checkbox" id="chkSatellites" checked onchange="redrawCanvas()"> 🛰️ Satellites</label>
+                </div>
+
+                <div class="controls-group">
+                    <label>Sensitivity Threshold: <span id="sigmaVal" style="font-weight:bold; color:var(--accent-yellow);">2.2 σ</span></label>
+                    <input type="range" id="sigmaSlider" min="1.0" max="5.0" step="0.1" value="2.2" onchange="onSigmaChange(this.value)">
+                </div>
             </div>
 
-            <div class="canvas-container">
+            <div class="canvas-container" id="canvasBox">
+                <div class="zoom-toolbar">
+                    <button onclick="zoomIn()">🔍 +</button>
+                    <button onclick="zoomOut()">🔍 -</button>
+                    <button onclick="resetZoom()">🎯 Reset View</button>
+                </div>
+                <div class="hud-overlay" id="hudText">Cursor Position: X: 0, Y: 0</div>
                 <canvas id="starCanvas" width="1200" height="900"></canvas>
             </div>
         </div>
@@ -416,20 +510,35 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
         let currentData = null;
         let currentImg = null;
 
+        // Zoom & Pan State
+        let scale = 1.0;
+        let panX = 0;
+        let panY = 0;
+        let isDragging = false;
+        let startX = 0;
+        let startY = 0;
+
         async function loadSampleData() {
-            const res = await fetch('/api/sample');
+            const sigma = document.getElementById('sigmaSlider').value;
+            const res = await fetch(`/api/sample?sigma=${sigma}`);
             currentData = await res.json();
             processLoadedData();
+        }
+
+        function onSigmaChange(val) {
+            document.getElementById('sigmaVal').innerText = parseFloat(val).toFixed(1) + ' σ';
+            loadSampleData();
         }
 
         document.getElementById('fileInput').addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
 
+            const sigma = document.getElementById('sigmaSlider').value;
             const formData = new FormData();
             formData.append('file', file);
 
-            const res = await fetch('/api/upload', {
+            const res = await fetch(`/api/upload?sigma=${sigma}`, {
                 method: 'POST',
                 body: formData
             });
@@ -441,7 +550,7 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
         function processLoadedData() {
             if (!currentData) return;
 
-            document.getElementById('valStars').innerText = currentData.detection.stars.length;
+            document.getElementById('valStars').innerText = currentData.detection.stars.len || currentData.detection.stars.length;
             document.getElementById('valSolved').innerText = currentData.solution.solved ? "SOLVED" : "UNSOLVED";
             document.getElementById('valRmse').innerText = currentData.solution.rmse_pixels.toFixed(2) + " px";
             document.getElementById('valQuality').innerText = currentData.aberration.quality_score.toFixed(1) + " / 100";
@@ -461,7 +570,6 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
                 <li><b>Satellites Tracked:</b> ${currentData.satellite_report.streaks.length}</li>
             `;
 
-            // Load Background Image
             if (currentData.image_data_url) {
                 currentImg = new Image();
                 currentImg.onload = () => redrawCanvas();
@@ -472,13 +580,87 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
             }
         }
 
+        // --- Canvas Zoom & Pan Handlers ---
+        const canvasBox = document.getElementById('canvasBox');
+        const canvas = document.getElementById('starCanvas');
+
+        canvasBox.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            const newScale = Math.min(Math.max(0.5, scale * zoomFactor), 15.0);
+
+            panX = mouseX - (mouseX - panX) * (newScale / scale);
+            panY = mouseY - (mouseY - panY) * (newScale / scale);
+
+            scale = newScale;
+            updateZoomDisplay();
+            redrawCanvas();
+        }, { passive: false });
+
+        canvasBox.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            startX = e.clientX - panX;
+            startY = e.clientY - panY;
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
+                const imgX = ((e.clientX - rect.left - panX) / (scale * (rect.width / canvas.width))).toFixed(1);
+                const imgY = ((e.clientY - rect.top - panY) / (scale * (rect.height / canvas.height))).toFixed(1);
+                document.getElementById('hudText').innerText = `Cursor Position: X: ${imgX}, Y: ${imgY}`;
+            }
+
+            if (!isDragging) return;
+            panX = e.clientX - startX;
+            panY = e.clientY - startY;
+            redrawCanvas();
+        });
+
+        window.addEventListener('mouseup', () => { isDragging = false; });
+
+        function zoomIn() {
+            scale = Math.min(15.0, scale * 1.3);
+            updateZoomDisplay();
+            redrawCanvas();
+        }
+
+        function zoomOut() {
+            scale = Math.max(0.5, scale / 1.3);
+            updateZoomDisplay();
+            redrawCanvas();
+        }
+
+        function resetZoom() {
+            scale = 1.0;
+            panX = 0;
+            panY = 0;
+            updateZoomDisplay();
+            redrawCanvas();
+        }
+
+        function updateZoomDisplay() {
+            document.getElementById('zoomDisplay').innerText = `Zoom: ${(scale * 100).toFixed(0)}%`;
+        }
+
         function redrawCanvas() {
             if (!currentData) return;
 
-            const canvas = document.getElementById('starCanvas');
             const ctx = canvas.getContext('2d');
             canvas.width = currentData.width;
             canvas.height = currentData.height;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+
+            // Apply Pan & Zoom Transformation
+            ctx.translate(panX, panY);
+            ctx.scale(scale, scale);
 
             const showImg = document.getElementById('chkImage').checked;
             const showStars = document.getElementById('chkStars').checked;
@@ -487,18 +669,17 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
             const showGrid = document.getElementById('chkGrid').checked;
             const showSatellites = document.getElementById('chkSatellites').checked;
 
-            // 1. Render Background Image or Dark Night Sky
+            // 1. Render Background Image or Dark Sky
             if (showImg && currentImg && currentImg.complete) {
                 ctx.drawImage(currentImg, 0, 0, canvas.width, canvas.height);
-                // Subtle dark overlay to boost vector visibility
-                ctx.fillStyle = 'rgba(11, 15, 25, 0.15)';
+                ctx.fillStyle = 'rgba(11, 15, 25, 0.12)';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
             } else {
                 ctx.fillStyle = '#05070e';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
             }
 
-            // 2. Render Lens Distortion Radial Grid (k1)
+            // 2. Render Lens Distortion Grid
             if (showGrid) {
                 const cx = canvas.width / 2;
                 const cy = canvas.height / 2;
@@ -506,8 +687,8 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
                 const k1 = currentData.aberration.radial_k1;
 
                 ctx.strokeStyle = 'rgba(192, 132, 252, 0.25)';
-                ctx.lineWidth = 1;
-                ctx.setLineDash([4, 4]);
+                ctx.lineWidth = 1 / scale;
+                ctx.setLineDash([4 / scale, 4 / scale]);
 
                 for (let r = 100; r < maxR; r += 150) {
                     ctx.beginPath();
@@ -515,7 +696,6 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
                     ctx.stroke();
                 }
 
-                // Render distortion vector arrows
                 for (let y = 100; y < canvas.height; y += 200) {
                     for (let x = 100; x < canvas.width; x += 250) {
                         const dx = x - cx;
@@ -533,14 +713,15 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
                 ctx.setLineDash([]);
             }
 
-            // 3. Render Ground Landscape Horizon Line
+            // 3. Render Ground Horizon Mask
             if (showSatellites && currentData.detection.horizon_y) {
                 const hy = currentData.detection.horizon_y;
                 ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
                 ctx.fillRect(0, hy, canvas.width, canvas.height - hy);
 
                 ctx.strokeStyle = '#ef4444';
-                ctx.setLineDash([6, 6]);
+                ctx.lineWidth = 1.5 / scale;
+                ctx.setLineDash([6 / scale, 6 / scale]);
                 ctx.beginPath();
                 ctx.moveTo(0, hy);
                 ctx.lineTo(canvas.width, hy);
@@ -548,62 +729,56 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
                 ctx.setLineDash([]);
             }
 
-            // 4. Render Located Stars on top of image
+            // 4. Render Located Stars
             if (showStars) {
                 currentData.detection.stars.forEach(star => {
-                    // Core centroid
                     ctx.fillStyle = '#facc15';
                     ctx.beginPath();
-                    ctx.arc(star.x, star.y, Math.max(2.5, star.fwhm * 0.8), 0, 2 * Math.PI);
+                    ctx.arc(star.x, star.y, Math.max(2.5 / scale, (star.fwhm * 0.8) / scale), 0, 2 * Math.PI);
                     ctx.fill();
 
-                    // Halo intensity ring
                     ctx.strokeStyle = 'rgba(250, 204, 21, 0.5)';
-                    ctx.lineWidth = 1.5;
+                    ctx.lineWidth = 1.5 / scale;
                     ctx.beginPath();
-                    ctx.arc(star.x, star.y, star.fwhm * 2.2, 0, 2 * Math.PI);
+                    ctx.arc(star.x, star.y, (star.fwhm * 2.2) / scale, 0, 2 * Math.PI);
                     ctx.stroke();
 
-                    // Centroid crosshair
                     ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
-                    ctx.lineWidth = 1;
+                    ctx.lineWidth = 1 / scale;
                     ctx.beginPath();
-                    ctx.moveTo(star.x - 4, star.y); ctx.lineTo(star.x + 4, star.y);
-                    ctx.moveTo(star.x, star.y - 4); ctx.lineTo(star.x, star.y + 4);
+                    ctx.moveTo(star.x - 4 / scale, star.y); ctx.lineTo(star.x + 4 / scale, star.y);
+                    ctx.moveTo(star.x, star.y - 4 / scale); ctx.lineTo(star.x, star.y + 4 / scale);
                     ctx.stroke();
                 });
             }
 
-            // 5. Render Solved Catalog Overlay & Residual Error Vectors
+            // 5. Render Solved Catalog Overlay & Error Vectors
             if (showCatalog) {
                 currentData.solution.matches.forEach(m => {
                     const err = m.residual_pixels;
-                    let color = '#4ade80'; // Low error green
-                    if (err >= 8.0) color = '#f87171'; // High error red
-                    else if (err >= 3.0) color = '#facc15'; // Medium error yellow
+                    let color = '#4ade80';
+                    if (err >= 8.0) color = '#f87171';
+                    else if (err >= 3.0) color = '#facc15';
 
-                    // Target Reticle around catalog position
                     ctx.strokeStyle = color;
-                    ctx.lineWidth = 2;
+                    ctx.lineWidth = 2 / scale;
                     ctx.beginPath();
-                    ctx.arc(m.pixel_x, m.pixel_y, 14, 0, 2 * Math.PI);
+                    ctx.arc(m.pixel_x, m.pixel_y, 14 / scale, 0, 2 * Math.PI);
                     ctx.stroke();
 
-                    // Reticle notches
                     ctx.beginPath();
-                    ctx.moveTo(m.pixel_x - 18, m.pixel_y); ctx.lineTo(m.pixel_x - 10, m.pixel_y);
-                    ctx.moveTo(m.pixel_x + 10, m.pixel_y); ctx.lineTo(m.pixel_x + 18, m.pixel_y);
-                    ctx.moveTo(m.pixel_x, m.pixel_y - 18); ctx.lineTo(m.pixel_x, m.pixel_y - 10);
-                    ctx.moveTo(m.pixel_x, m.pixel_y + 10); ctx.lineTo(m.pixel_x, m.pixel_y + 18);
+                    ctx.moveTo(m.pixel_x - 18 / scale, m.pixel_y); ctx.lineTo(m.pixel_x - 10 / scale, m.pixel_y);
+                    ctx.moveTo(m.pixel_x + 10 / scale, m.pixel_y); ctx.lineTo(m.pixel_x + 18 / scale, m.pixel_y);
+                    ctx.moveTo(m.pixel_x, m.pixel_y - 18 / scale); ctx.lineTo(m.pixel_x, m.pixel_y - 10 / scale);
+                    ctx.moveTo(m.pixel_x, m.pixel_y + 10 / scale); ctx.lineTo(m.pixel_x, m.pixel_y + 18 / scale);
                     ctx.stroke();
 
-                    // 6. Draw Residual Error Vectors linking detected star to catalog position
                     if (showErrorVectors) {
                         const detStar = currentData.detection.stars.find(s => s.id === m.star_id);
                         if (detStar) {
                             ctx.strokeStyle = color;
-                            ctx.lineWidth = 1.5;
-                            ctx.setLineDash([3, 3]);
+                            ctx.lineWidth = 1.5 / scale;
+                            ctx.setLineDash([3 / scale, 3 / scale]);
                             ctx.beginPath();
                             ctx.moveTo(detStar.x, detStar.y);
                             ctx.lineTo(m.pixel_x, m.pixel_y);
@@ -612,32 +787,33 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
                         }
                     }
 
-                    // Label Star Name & Error Badge
                     ctx.fillStyle = '#ffffff';
-                    ctx.font = 'bold 12px sans-serif';
-                    ctx.fillText(m.catalog_name, m.pixel_x + 22, m.pixel_y + 2);
+                    ctx.font = `bold ${Math.max(10, 12 / scale)}px sans-serif`;
+                    ctx.fillText(m.catalog_name, m.pixel_x + 22 / scale, m.pixel_y + 2 / scale);
 
                     ctx.fillStyle = color;
-                    ctx.font = '11px monospace';
-                    ctx.fillText(`err: ${err.toFixed(1)}px`, m.pixel_x + 22, m.pixel_y + 16);
+                    ctx.font = `${Math.max(9, 11 / scale)}px monospace`;
+                    ctx.fillText(`err: ${err.toFixed(1)}px`, m.pixel_x + 22 / scale, m.pixel_y + 16 / scale);
                 });
             }
 
-            // 7. Render Satellite Streaks
+            // 6. Render Satellite Streaks
             if (showSatellites) {
                 currentData.satellite_report.streaks.forEach(s => {
                     ctx.strokeStyle = '#38bdf8';
-                    ctx.lineWidth = 3;
+                    ctx.lineWidth = 3 / scale;
                     ctx.beginPath();
                     ctx.moveTo(s.start_x, s.start_y);
                     ctx.lineTo(s.end_x, s.end_y);
                     ctx.stroke();
 
                     ctx.fillStyle = '#38bdf8';
-                    ctx.font = 'bold 12px sans-serif';
-                    ctx.fillText(`Satellite Track #${s.id}`, s.start_x + 10, s.start_y - 10);
+                    ctx.font = `bold ${Math.max(10, 12 / scale)}px sans-serif`;
+                    ctx.fillText(`Satellite Track #${s.id}`, s.start_x + 10 / scale, s.start_y - 10 / scale);
                 });
             }
+
+            ctx.restore();
         }
 
         window.onload = loadSampleData;
