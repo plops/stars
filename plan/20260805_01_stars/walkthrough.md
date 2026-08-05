@@ -54,12 +54,12 @@ The application extracts embedded EXIF metadata, detects stars while masking gro
 All quality assurance checks passed with 100% compliance:
 
 ```bash
-# 1. Unit & Integration Tests (12/12 Passed)
+# 1. Unit & Integration Tests (13/13 Passed)
 cargo test
 
 # Output:
 # test result: ok. 10 passed in lib
-# test result: ok. 2 passed in integration_tests
+# test result: ok. 3 passed in integration_tests (including real image /workspace/src/stars.jpg)
 
 # 2. Linter Verification (Zero Warnings)
 cargo clippy -- -W clippy::all

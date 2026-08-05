@@ -73,3 +73,34 @@ fn test_full_pipeline_helper() {
     assert!(result.solution.solved);
     assert!(!result.satellite_report.streaks.is_empty());
 }
+
+#[test]
+fn test_real_image_stars_jpg_pipeline() {
+    let img_path = std::path::Path::new("/workspace/src/stars.jpg");
+    if !img_path.exists() {
+        return;
+    }
+
+    let loaded = stars::image_loader::load_image_from_path(img_path)
+        .expect("Failed to load /workspace/src/stars.jpg");
+
+    assert_eq!(loaded.width, 1600);
+    assert_eq!(loaded.height, 1200);
+
+    let result = run_full_pipeline(&loaded);
+
+    assert!(
+        result.detection.stars.len() >= 10,
+        "Expected at least 10 stars detected in stars.jpg, got {}",
+        result.detection.stars.len()
+    );
+    assert!(
+        result.solution.solved,
+        "Plate solving must succeed for stars.jpg"
+    );
+    assert!(
+        !result.solution.matches.is_empty(),
+        "Expected matched catalog stars"
+    );
+    assert!(result.aberration.quality_score > 0.0);
+}
