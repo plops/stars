@@ -51,7 +51,7 @@ fn test_end_to_end_synthetic_astrophotography_pipeline() {
     );
 
     // 5. Satellite Track Detection
-    let streaks = detect_satellite_streaks(&loaded.gray);
+    let streaks = detect_satellite_streaks(&loaded.gray, detection.horizon_y);
     assert!(
         !streaks.is_empty(),
         "Satellite detector must identify linear streak"

@@ -25,10 +25,10 @@ pub struct DetectionSettings {
 impl Default for DetectionSettings {
     fn default() -> Self {
         Self {
-            sigma_threshold: 2.8,
+            sigma_threshold: 2.5,
             min_area: 2,
             max_area: 500,
-            max_elongation: 2.5,
+            max_elongation: 2.8,
             mask_horizon: true,
         }
     }
@@ -55,8 +55,11 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
 
     let effective_height = horizon_y.unwrap_or(height);
 
-    // 2. Global Background Stats
+    // 2. Global Sky Background Stats
     let (global_bg_mean, global_bg_std) = estimate_background(img, effective_height);
+
+    // Absolute Noise Floor for Genuine Astronomical Stars
+    let global_noise_floor = global_bg_mean + 1.8 * global_bg_std;
 
     // 3. Construct Adaptive Local Background Grid (16x12 Mesh)
     let grid_cols = 16u32;
@@ -97,7 +100,7 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
         }
     }
 
-    // 4. Scan Image for Point-Source Stars using Peak Sharpness & PSF Profile Validation
+    // 4. Scan Image for Genuine Astronomical Stars
     let mut stars = Vec::new();
     let mut rejected_blobs = 0;
 
@@ -112,12 +115,12 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
             let local_threshold = bg_m + settings.sigma_threshold * bg_s;
             let val = img.get_pixel(x, y)[0] as f64;
 
-            // Absolute minimum peak brightness above local background
-            if (val - bg_m) < 6.0 {
+            // Global Noise Floor Filter: Must exceed global noise floor (eliminates tree foliage noise)
+            if val < global_noise_floor {
                 continue;
             }
 
-            // Check strict 3x3 local maximum
+            // Strict 3x3 Local Maximum Peak
             if val >= local_threshold
                 && val > img.get_pixel(x - 1, y)[0] as f64
                 && val > img.get_pixel(x + 1, y)[0] as f64
@@ -128,7 +131,7 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
                 && val >= img.get_pixel(x - 1, y + 1)[0] as f64
                 && val >= img.get_pixel(x + 1, y + 1)[0] as f64
             {
-                // Calculate 3x3 Surrounding Average for Point Source Sharpness Filter
+                // Calculate 3x3 Surrounding Average for Point-Source PSF Sharpness
                 let mut surround_sum = 0.0;
                 let mut surround_count = 0.0;
 
@@ -145,11 +148,9 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
                 let peak_signal = val - bg_m;
                 let surround_signal = (surround_avg - bg_m).max(0.1);
 
-                // PSF Sharpness Test: A star peak must be significantly brighter than surrounding pixels
+                // PSF Sharpness Test: Peak must be brighter than surrounding border
                 let sharpness_ratio = peak_signal / surround_signal;
-
-                // Terrestrial foliage texture or flat car reflections have sharpness_ratio ~ 1.0
-                if sharpness_ratio < 1.18 {
+                if sharpness_ratio < 1.02 {
                     rejected_blobs += 1;
                     continue;
                 }
@@ -199,7 +200,6 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
                     let lambda2 = ((mu_xx + mu_yy - delta) / 2.0).max(1e-4);
                     let elongation = (lambda1 / lambda2).sqrt();
 
-                    // Reject non-circular terrestrial highlights / foliage edges
                     if elongation <= settings.max_elongation {
                         let fwhm = 2.355 * (lambda1 + lambda2).sqrt() / std::f64::consts::SQRT_2;
                         let snr = peak_signal / bg_s.max(1.0);
@@ -260,7 +260,6 @@ fn detect_horizon_y(img: &GrayImage) -> Option<u32> {
         let variance = (row_sq_sum / count) - (mean * mean);
         let avg_edge = edge_sum / count;
 
-        // Ground landscape (trees, cars, buildings) has structured edge variance or high brightness
         if (mean > 32.0 && variance > 110.0) || avg_edge > 12.0 {
             return Some(y);
         }

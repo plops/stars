@@ -159,7 +159,7 @@ pub fn run_full_pipeline_with_sigma(
         45.0,
     );
 
-    let streaks = detect_satellite_streaks(&loaded.gray);
+    let streaks = detect_satellite_streaks(&loaded.gray, detection.horizon_y);
     let sat_matches = match_satellites_with_sgp4(&streaks, ts);
 
     let image_data_url = encode_image_data_url(loaded);
