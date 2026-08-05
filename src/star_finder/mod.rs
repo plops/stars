@@ -27,8 +27,8 @@ impl Default for DetectionSettings {
         Self {
             sigma_threshold: 2.2,
             min_area: 2,
-            max_area: 500,
-            max_elongation: 3.0,
+            max_area: 800,
+            max_elongation: 3.2,
             mask_horizon: true,
         }
     }
@@ -55,117 +55,136 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
 
     let effective_height = horizon_y.unwrap_or(height);
 
-    // 2. Estimate Sky Background Mean and StdDev (Sigma Clipping)
-    let (bg_mean, bg_std) = estimate_background(img, effective_height);
-    let threshold = bg_mean + settings.sigma_threshold * bg_std;
+    // 2. Global Background Stats
+    let (global_bg_mean, global_bg_std) = estimate_background(img, effective_height);
 
-    // 3. Find Connected Components above Threshold
-    let mut visited = vec![false; (width * effective_height) as usize];
+    // 3. Construct Adaptive Local Background Grid (16x12 Mesh)
+    let grid_cols = 16u32;
+    let grid_rows = 12u32;
+    let cell_w = (width / grid_cols).max(1);
+    let cell_h = (effective_height / grid_rows).max(1);
+
+    let mut local_means = vec![global_bg_mean; (grid_cols * grid_rows) as usize];
+    let mut local_stds = vec![global_bg_std; (grid_cols * grid_rows) as usize];
+
+    for gy in 0..grid_rows {
+        for gx in 0..grid_cols {
+            let start_x = gx * cell_w;
+            let end_x = ((gx + 1) * cell_w).min(width);
+            let start_y = gy * cell_h;
+            let end_y = ((gy + 1) * cell_h).min(effective_height);
+
+            let mut cell_pixels = Vec::new();
+            for y in (start_y..end_y).step_by(2) {
+                for x in (start_x..end_x).step_by(2) {
+                    cell_pixels.push(img.get_pixel(x, y)[0] as f64);
+                }
+            }
+
+            if !cell_pixels.is_empty() {
+                cell_pixels.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let median = cell_pixels[cell_pixels.len() / 2];
+
+                let mut mads: Vec<f64> = cell_pixels.iter().map(|p| (p - median).abs()).collect();
+                mads.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let mad = mads[mads.len() / 2];
+                let std_dev = (mad * 1.4826).max(1.2);
+
+                let g_idx = (gy * grid_cols + gx) as usize;
+                local_means[g_idx] = median;
+                local_stds[g_idx] = std_dev;
+            }
+        }
+    }
+
+    // 4. Scan Image for Local Maxima Points above Local Adaptive Threshold
     let mut stars = Vec::new();
     let mut rejected_blobs = 0;
 
-    for y in 0..effective_height {
-        for x in 0..width {
-            let idx = (y * width + x) as usize;
-            if visited[idx] {
-                continue;
-            }
-            visited[idx] = true;
+    for y in 1..(effective_height - 1) {
+        let gy = (y / cell_h).min(grid_rows - 1);
+        for x in 1..(width - 1) {
+            let gx = (x / cell_w).min(grid_cols - 1);
+            let g_idx = (gy * grid_cols + gx) as usize;
+            let bg_m = local_means[g_idx];
+            let bg_s = local_stds[g_idx];
 
-            let pixel_val = img.get_pixel(x, y)[0] as f64;
-            if pixel_val > threshold {
-                // BFS to collect component pixels
-                let mut component = Vec::new();
-                let mut queue = vec![(x, y)];
+            let local_threshold = bg_m + settings.sigma_threshold * bg_s;
+            let val = img.get_pixel(x, y)[0] as f64;
 
-                while let Some((cx, cy)) = queue.pop() {
-                    let cval = img.get_pixel(cx, cy)[0] as f64;
-                    component.push((cx, cy, cval));
+            // Check if (x, y) is a local 3x3 maximum above adaptive threshold
+            if val >= local_threshold
+                && val >= img.get_pixel(x - 1, y)[0] as f64
+                && val >= img.get_pixel(x + 1, y)[0] as f64
+                && val >= img.get_pixel(x, y - 1)[0] as f64
+                && val >= img.get_pixel(x, y + 1)[0] as f64
+                && val >= img.get_pixel(x - 1, y - 1)[0] as f64
+                && val >= img.get_pixel(x + 1, y - 1)[0] as f64
+                && val >= img.get_pixel(x - 1, y + 1)[0] as f64
+                && val >= img.get_pixel(x + 1, y + 1)[0] as f64
+            {
+                // Sub-pixel 3x3 Centroid (Barycenter) calculation
+                let mut sum_i = 0.0;
+                let mut sum_x = 0.0;
+                let mut sum_y = 0.0;
 
-                    for (dx, dy) in &[(-1, 0), (1, 0), (0, -1), (0, 1)] {
-                        let nx = cx as i32 + dx;
-                        let ny = cy as i32 + dy;
-
-                        if nx >= 0 && nx < width as i32 && ny >= 0 && ny < effective_height as i32 {
-                            let nidx = (ny as u32 * width + nx as u32) as usize;
-                            if !visited[nidx] {
-                                let nval = img.get_pixel(nx as u32, ny as u32)[0] as f64;
-                                if nval > threshold {
-                                    visited[nidx] = true;
-                                    queue.push((nx as u32, ny as u32));
-                                }
-                            }
-                        }
+                for ny in (y - 1)..=(y + 1) {
+                    for nx in (x - 1)..=(x + 1) {
+                        let pval = img.get_pixel(nx, ny)[0] as f64;
+                        let weight = (pval - bg_m).max(0.1);
+                        sum_i += weight;
+                        sum_x += nx as f64 * weight;
+                        sum_y += ny as f64 * weight;
                     }
                 }
 
-                // 4. Evaluate Component Blob Criteria
-                if component.len() >= settings.min_area && component.len() <= settings.max_area {
-                    let mut sum_i = 0.0;
-                    let mut sum_x = 0.0;
-                    let mut sum_y = 0.0;
-                    let mut peak = 0u8;
+                if sum_i > 0.0 {
+                    let sub_x = sum_x / sum_i;
+                    let sub_y = sum_y / sum_i;
 
-                    for &(px, py, val) in &component {
-                        let weight = val - bg_mean;
-                        sum_i += weight;
-                        sum_x += px as f64 * weight;
-                        sum_y += py as f64 * weight;
-                        if val as u8 > peak {
-                            peak = val as u8;
-                        }
-                    }
+                    // Calculate Second Moments for Elongation & FWHM
+                    let mut mu_xx = 0.0;
+                    let mut mu_yy = 0.0;
+                    let mut mu_xy = 0.0;
 
-                    if sum_i > 0.0 {
-                        let star_x = sum_x / sum_i;
-                        let star_y = sum_y / sum_i;
-
-                        // Calculate Second Moments for Elongation & FWHM
-                        let mut mu_xx = 0.0;
-                        let mut mu_yy = 0.0;
-                        let mut mu_xy = 0.0;
-
-                        for &(px, py, val) in &component {
-                            let weight = val - bg_mean;
-                            let dx = px as f64 - star_x;
-                            let dy = py as f64 - star_y;
+                    for ny in (y - 1)..=(y + 1) {
+                        for nx in (x - 1)..=(x + 1) {
+                            let pval = img.get_pixel(nx, ny)[0] as f64;
+                            let weight = (pval - bg_m).max(0.1);
+                            let dx = nx as f64 - sub_x;
+                            let dy = ny as f64 - sub_y;
                             mu_xx += dx * dx * weight;
                             mu_yy += dy * dy * weight;
                             mu_xy += dx * dy * weight;
                         }
-
-                        mu_xx /= sum_i;
-                        mu_yy /= sum_i;
-                        mu_xy /= sum_i;
-
-                        let delta = ((mu_xx - mu_yy).powi(2) + 4.0 * mu_xy * mu_xy).sqrt();
-                        let lambda1 = (mu_xx + mu_yy + delta) / 2.0;
-                        let lambda2 = ((mu_xx + mu_yy - delta) / 2.0).max(1e-4);
-
-                        let elongation = (lambda1 / lambda2).sqrt();
-
-                        // Reject satellite streaks or extended lines
-                        if elongation <= settings.max_elongation {
-                            let fwhm =
-                                2.355 * (lambda1 + lambda2).sqrt() / std::f64::consts::SQRT_2;
-                            let snr = (peak as f64 - bg_mean) / bg_std.max(1.0);
-
-                            stars.push(DetectedStar {
-                                id: stars.len() + 1,
-                                x: star_x,
-                                y: star_y,
-                                intensity: sum_i,
-                                peak_brightness: peak,
-                                fwhm,
-                                snr,
-                                elongation,
-                            });
-                        } else {
-                            rejected_blobs += 1;
-                        }
                     }
-                } else {
-                    rejected_blobs += 1;
+
+                    mu_xx /= sum_i;
+                    mu_yy /= sum_i;
+                    mu_xy /= sum_i;
+
+                    let delta = ((mu_xx - mu_yy).powi(2) + 4.0 * mu_xy * mu_xy).sqrt();
+                    let lambda1 = (mu_xx + mu_yy + delta) / 2.0;
+                    let lambda2 = ((mu_xx + mu_yy - delta) / 2.0).max(1e-4);
+                    let elongation = (lambda1 / lambda2).sqrt();
+
+                    if elongation <= settings.max_elongation {
+                        let fwhm = 2.355 * (lambda1 + lambda2).sqrt() / std::f64::consts::SQRT_2;
+                        let snr = (val - bg_m) / bg_s.max(1.0);
+
+                        stars.push(DetectedStar {
+                            id: stars.len() + 1,
+                            x: sub_x,
+                            y: sub_y,
+                            intensity: sum_i,
+                            peak_brightness: val as u8,
+                            fwhm: fwhm.clamp(1.2, 8.0),
+                            snr,
+                            elongation,
+                        });
+                    } else {
+                        rejected_blobs += 1;
+                    }
                 }
             }
         }
@@ -173,8 +192,8 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
 
     DetectionResult {
         stars,
-        background_mean: bg_mean,
-        background_std: bg_std,
+        background_mean: global_bg_mean,
+        background_std: global_bg_std,
         horizon_y,
         rejected_blobs,
     }
@@ -187,7 +206,6 @@ fn detect_horizon_y(img: &GrayImage) -> Option<u32> {
         return None;
     }
 
-    // Scan from bottom 40% of image upwards to find transition from high variance/dense pixels to sky
     let start_y = (height as f64 * 0.5) as u32;
 
     for y in (start_y..height - 10).rev() {
@@ -204,7 +222,6 @@ fn detect_horizon_y(img: &GrayImage) -> Option<u32> {
         let mean = row_sum / count;
         let variance = (row_sq_sum / count) - (mean * mean);
 
-        // Ground landscape typically has higher brightness/variance or structured features
         if mean > 40.0 && variance > 200.0 {
             return Some(y);
         }
@@ -228,17 +245,13 @@ fn estimate_background(img: &GrayImage, max_y: u32) -> (f64, f64) {
     }
 
     pixels.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-    // 50th percentile (median) as background mean estimate
     let median = pixels[pixels.len() / 2];
 
-    // Standard deviation estimated from Median Absolute Deviation (MAD)
     let mut mads: Vec<f64> = pixels.iter().map(|p| (p - median).abs()).collect();
     mads.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mad = mads[mads.len() / 2];
 
     let std_dev = mad * 1.4826;
-
     (median, std_dev.max(1.0))
 }
 
@@ -265,7 +278,6 @@ mod tests {
             result.stars.len()
         );
 
-        // Verify horizon detection masked lower portion
         if let Some(hy) = result.horizon_y {
             for star in &result.stars {
                 assert!(

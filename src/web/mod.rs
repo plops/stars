@@ -510,6 +510,10 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
         let currentData = null;
         let currentImg = null;
 
+        // Source tracking: 'sample' or 'file'
+        let currentSource = 'sample';
+        let currentFile = null;
+
         // Zoom & Pan State
         let scale = 1.0;
         let panX = 0;
@@ -519,6 +523,7 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
         let startY = 0;
 
         async function loadSampleData() {
+            currentSource = 'sample';
             const sigma = document.getElementById('sigmaSlider').value;
             const res = await fetch(`/api/sample?sigma=${sigma}`);
             currentData = await res.json();
@@ -527,13 +532,23 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
 
         function onSigmaChange(val) {
             document.getElementById('sigmaVal').innerText = parseFloat(val).toFixed(1) + ' σ';
-            loadSampleData();
+            if (currentSource === 'file' && currentFile) {
+                uploadSelectedFile(currentFile);
+            } else {
+                loadSampleData();
+            }
         }
 
         document.getElementById('fileInput').addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
 
+            currentFile = file;
+            currentSource = 'file';
+            uploadSelectedFile(file);
+        });
+
+        async function uploadSelectedFile(file) {
             const sigma = document.getElementById('sigmaSlider').value;
             const formData = new FormData();
             formData.append('file', file);
@@ -545,12 +560,12 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
 
             currentData = await res.json();
             processLoadedData();
-        });
+        }
 
         function processLoadedData() {
             if (!currentData) return;
 
-            document.getElementById('valStars').innerText = currentData.detection.stars.len || currentData.detection.stars.length;
+            document.getElementById('valStars').innerText = currentData.detection.stars.length;
             document.getElementById('valSolved').innerText = currentData.solution.solved ? "SOLVED" : "UNSOLVED";
             document.getElementById('valRmse').innerText = currentData.solution.rmse_pixels.toFixed(2) + " px";
             document.getElementById('valQuality').innerText = currentData.aberration.quality_score.toFixed(1) + " / 100";
