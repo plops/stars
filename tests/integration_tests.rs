@@ -44,6 +44,7 @@ fn test_end_to_end_synthetic_astrophotography_pipeline() {
         loaded.width,
         loaded.height,
         45.0,
+        None,
     );
     assert!(
         aberration.quality_score > 0.0,
@@ -58,8 +59,14 @@ fn test_end_to_end_synthetic_astrophotography_pipeline() {
     );
 
     let sat_matches = match_satellites_with_sgp4(&streaks, 1785969000);
-    assert_eq!(sat_matches.len(), streaks.len());
-    assert_eq!(sat_matches[0].name, "ISS (ZARYA)");
+    // Matches may be fewer than streaks (no fake fallback)
+    assert!(sat_matches.len() <= streaks.len());
+    for m in &sat_matches {
+        assert!(
+            m.confidence > 0.0 && m.confidence <= 1.0,
+            "Confidence should be in (0, 1]"
+        );
+    }
 }
 
 #[test]

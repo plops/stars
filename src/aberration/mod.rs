@@ -20,6 +20,7 @@ pub fn analyze_aberration(
     width: u32,
     height: u32,
     altitude_deg: f64,
+    rgb_image: Option<&image::RgbImage>,
 ) -> AberrationReport {
     let cx = width as f64 / 2.0;
     let cy = height as f64 / 2.0;
@@ -81,17 +82,22 @@ pub fn analyze_aberration(
     let coma_factor = if edge_count > 0 {
         coma_sum / edge_count as f64
     } else {
-        0.04
+        0.0
     };
 
     let astigmatism_factor = if edge_count > 0 {
         astig_sum / edge_count as f64
     } else {
-        0.03
+        0.0
     };
 
-    // Estimated Chromatic Aberration near edges (pixel displacement between spectrum components)
-    let chromatic_aberration_px = (coma_factor * 1.8 + k1.abs() * 5.0).clamp(0.1, 3.5);
+    // Measure chromatic aberration from RGB channel centroid displacement near edges
+    let chromatic_aberration_px = if let Some(rgb) = rgb_image {
+        measure_rgb_chromatic_aberration(rgb, stars, cx, cy, max_radius)
+    } else {
+        // Fallback estimate when no RGB data available
+        (coma_factor.abs() * 1.2 + k1.abs() * 3.0).clamp(0.0, 3.5)
+    };
 
     // 3. Bennett's Atmospheric Refraction Formula (arcminutes)
     let alt_clamped = altitude_deg.max(1.0);
@@ -120,6 +126,74 @@ pub fn analyze_aberration(
     }
 }
 
+/// Measure chromatic aberration by comparing R vs B channel centroids near image edges
+fn measure_rgb_chromatic_aberration(
+    rgb: &image::RgbImage,
+    stars: &[DetectedStar],
+    cx: f64,
+    cy: f64,
+    max_radius: f64,
+) -> f64 {
+    let (w, h) = rgb.dimensions();
+    let mut total_shift = 0.0;
+    let mut count = 0;
+
+    for star in stars {
+        let norm_r = ((star.x - cx).powi(2) + (star.y - cy).powi(2)).sqrt() / max_radius;
+        // Only measure near edges (outer 40% of image radius)
+        if norm_r < 0.6 {
+            continue;
+        }
+
+        let sx = star.x.round() as i32;
+        let sy = star.y.round() as i32;
+        let half = 4i32; // 9x9 window
+
+        let mut r_wx = 0.0;
+        let mut r_wy = 0.0;
+        let mut r_wt = 0.0;
+        let mut b_wx = 0.0;
+        let mut b_wy = 0.0;
+        let mut b_wt = 0.0;
+
+        for dy in -half..=half {
+            for dx in -half..=half {
+                let px = sx + dx;
+                let py = sy + dy;
+                if px < 0 || py < 0 || px >= w as i32 || py >= h as i32 {
+                    continue;
+                }
+                let pixel = rgb.get_pixel(px as u32, py as u32);
+                let r_val = pixel[0] as f64;
+                let b_val = pixel[2] as f64;
+
+                r_wx += px as f64 * r_val;
+                r_wy += py as f64 * r_val;
+                r_wt += r_val;
+                b_wx += px as f64 * b_val;
+                b_wy += py as f64 * b_val;
+                b_wt += b_val;
+            }
+        }
+
+        if r_wt > 0.0 && b_wt > 0.0 {
+            let r_cx = r_wx / r_wt;
+            let r_cy = r_wy / r_wt;
+            let b_cx = b_wx / b_wt;
+            let b_cy = b_wy / b_wt;
+            let shift = ((r_cx - b_cx).powi(2) + (r_cy - b_cy).powi(2)).sqrt();
+            total_shift += shift;
+            count += 1;
+        }
+    }
+
+    if count > 0 {
+        (total_shift / count as f64).clamp(0.0, 5.0)
+    } else {
+        0.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,7 +211,7 @@ mod tests {
             rmse_pixels: 0.0,
         };
 
-        let report = analyze_aberration(&stars, &sol, 1200, 900, 45.0);
+        let report = analyze_aberration(&stars, &sol, 1200, 900, 45.0, None);
         assert!(
             report.atmospheric_refraction_arcmin > 0.8
                 && report.atmospheric_refraction_arcmin < 1.2

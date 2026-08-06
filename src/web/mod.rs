@@ -99,7 +99,8 @@ async fn upload_and_analyze(
 
     let loaded = match load_image_from_bytes(&filename, &file_bytes) {
         Ok(l) => l,
-        Err(_) => {
+        Err(e) => {
+            eprintln!("Failed to load uploaded image '{}': {}", filename, e);
             let opts = SyntheticOptions::default();
             generate_synthetic_image(&opts)
         }
@@ -157,6 +158,7 @@ pub fn run_full_pipeline_with_sigma(
         loaded.width,
         loaded.height,
         45.0,
+        Some(&loaded.rgb),
     );
 
     let streaks = detect_satellite_streaks(&loaded.gray, detection.horizon_y);

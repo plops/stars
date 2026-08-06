@@ -142,7 +142,11 @@ pub fn parse_exif_from_reader<R: std::io::BufRead + Seek>(reader: &mut R) -> Res
     if let Some(field) = exif.get_field(Tag::DateTimeOriginal, In::PRIMARY) {
         let dt_str = field.display_value().to_string();
         meta.datetime_original = Some(dt_str.clone());
-        if let Ok(ndt) = NaiveDateTime::parse_from_str(&dt_str, "%Y-%m-%d %H:%M:%S") {
+        // Try standard EXIF format (colons) first, then fallback to hyphens
+        let dt_trimmed = dt_str.trim_matches('"');
+        if let Ok(ndt) = NaiveDateTime::parse_from_str(dt_trimmed, "%Y:%m:%d %H:%M:%S")
+            .or_else(|_| NaiveDateTime::parse_from_str(dt_trimmed, "%Y-%m-%d %H:%M:%S"))
+        {
             meta.timestamp_utc = Some(Utc.from_utc_datetime(&ndt).timestamp());
         }
     }
@@ -154,7 +158,7 @@ pub fn parse_exif_from_reader<R: std::io::BufRead + Seek>(reader: &mut R) -> Res
     let lat_field = exif.get_field(Tag::GPSLatitude, In::PRIMARY);
     if let (Some(lat_field), Some(lat_ref)) = (lat_field, lat_ref) {
         if let Value::Rational(ref r) = lat_field.value {
-            if r.len() >= 3 {
+            if r.len() >= 3 && r[0].denom != 0 && r[1].denom != 0 && r[2].denom != 0 {
                 let deg = r[0].num as f64 / r[0].denom as f64;
                 let min = r[1].num as f64 / r[1].denom as f64;
                 let sec = r[2].num as f64 / r[2].denom as f64;
@@ -173,7 +177,7 @@ pub fn parse_exif_from_reader<R: std::io::BufRead + Seek>(reader: &mut R) -> Res
     let lon_field = exif.get_field(Tag::GPSLongitude, In::PRIMARY);
     if let (Some(lon_field), Some(lon_ref)) = (lon_field, lon_ref) {
         if let Value::Rational(ref r) = lon_field.value {
-            if r.len() >= 3 {
+            if r.len() >= 3 && r[0].denom != 0 && r[1].denom != 0 && r[2].denom != 0 {
                 let deg = r[0].num as f64 / r[0].denom as f64;
                 let min = r[1].num as f64 / r[1].denom as f64;
                 let sec = r[2].num as f64 / r[2].denom as f64;

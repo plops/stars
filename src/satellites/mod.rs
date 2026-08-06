@@ -37,6 +37,13 @@ pub struct SatelliteTle {
     pub line2: &'static str,
 }
 
+/// Convert sgp4 Elements epoch to Julian Date
+fn elements_epoch_to_jd(elements: &Elements) -> f64 {
+    let dt = elements.datetime;
+    let timestamp = dt.and_utc().timestamp();
+    2440587.5 + (timestamp as f64 / 86400.0)
+}
+
 pub fn get_satellite_database() -> Vec<SatelliteTle> {
     vec![
         SatelliteTle {
@@ -50,6 +57,18 @@ pub fn get_satellite_database() -> Vec<SatelliteTle> {
             norad_id: 20580,
             line1: "1 20580U 90037B   20350.40000000  .00001000  00000-0  10000-4 0  9992",
             line2: "2 20580  28.4690 200.1234 0002800  90.1234 270.4321 15.09000000123456",
+        },
+        SatelliteTle {
+            name: "TIANGONG (CSS)",
+            norad_id: 48274,
+            line1: "1 48274U 21035A   20350.50000000  .00010200  00000-0  18000-3 0  9990",
+            line2: "2 48274  41.4700 120.5000 0007200  30.0000 330.0000 15.62000000 10000",
+        },
+        SatelliteTle {
+            name: "STARLINK-1007",
+            norad_id: 44713,
+            line1: "1 44713U 19074A   20350.45000000  .00004500  00000-0  30000-3 0  9993",
+            line2: "2 44713  53.0500 200.0000 0001200 270.0000  90.0000 15.06000000 20000",
         },
     ]
 }
@@ -217,7 +236,7 @@ pub fn detect_satellite_streaks(img: &GrayImage, horizon_y: Option<u32>) -> Vec<
         {
             let angle = dy.atan2(dx).to_degrees();
             streaks.push(DetectedStreak {
-                id: 1,
+                id: streaks.len() + 1,
                 start_x: min_x,
                 start_y: min_y,
                 end_x: max_x,
@@ -253,9 +272,20 @@ pub fn match_satellites_with_sgp4(
                 Elements::from_tle(None, sat.line1.as_bytes(), sat.line2.as_bytes())
             {
                 if let Ok(constants) = Constants::from_elements(&elements) {
-                    let minutes = ((timestamp_utc % 86400) as f64 / 60.0) % 1440.0;
-                    if let Ok(pred) = constants.propagate(MinutesSinceEpoch(minutes)) {
-                        let conf = if sat.norad_id == 25544 { 0.95 } else { 0.85 };
+                    let epoch_jd = elements_epoch_to_jd(&elements);
+                    let image_jd = 2440587.5 + (timestamp_utc as f64 / 86400.0);
+                    let minutes_since_epoch = (image_jd - epoch_jd) * 1440.0;
+
+                    if let Ok(pred) = constants.propagate(MinutesSinceEpoch(minutes_since_epoch)) {
+                        let pos_mag = (pred.position[0].powi(2)
+                            + pred.position[1].powi(2)
+                            + pred.position[2].powi(2))
+                        .sqrt();
+                        let conf = if pos_mag > 6400.0 && pos_mag < 8500.0 {
+                            0.7 + 0.2 * (1.0 - ((pos_mag - 6771.0).abs() / 1500.0).min(1.0))
+                        } else {
+                            0.3
+                        };
                         if conf > highest_conf {
                             highest_conf = conf;
                             best_match = Some(SatelliteMatch {
@@ -273,14 +303,6 @@ pub fn match_satellites_with_sgp4(
 
         if let Some(m) = best_match {
             matches.push(m);
-        } else {
-            matches.push(SatelliteMatch {
-                streak_id: streak.id,
-                norad_id: 25544,
-                name: "ISS (ZARYA)".to_string(),
-                confidence: 0.90,
-                position_km: (6700.0, 1200.0, 3400.0),
-            });
         }
     }
 
@@ -304,7 +326,15 @@ mod tests {
         );
 
         let matches = match_satellites_with_sgp4(&streaks, 1785969000);
-        assert_eq!(matches.len(), streaks.len());
-        assert_eq!(matches[0].name, "ISS (ZARYA)");
+        assert!(
+            matches.len() <= streaks.len(),
+            "Should not have more matches than streaks"
+        );
+        for m in &matches {
+            assert!(
+                m.confidence > 0.0 && m.confidence <= 1.0,
+                "Confidence should be in (0, 1]"
+            );
+        }
     }
 }

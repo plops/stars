@@ -66,8 +66,22 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
     let mut stars = Vec::new();
     let mut rejected_blobs = 0;
 
-    for y in 2..(effective_height - 2) {
-        for x in 2..(width - 2) {
+    let y_start = 2u32;
+    let y_end = effective_height.saturating_sub(2);
+    let x_start = 2u32;
+    let x_end = width.saturating_sub(2);
+    if y_end <= y_start || x_end <= x_start {
+        return DetectionResult {
+            stars: Vec::new(),
+            background_mean: global_bg_mean,
+            background_std: global_bg_std,
+            horizon_y,
+            rejected_blobs: 0,
+        };
+    }
+
+    for y in y_start..y_end {
+        for x in x_start..x_end {
             let idx = (y * width + x) as usize;
             if visited[idx] {
                 continue;
@@ -98,10 +112,10 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
                             let nx = cx as i32 + dx;
                             let ny = cy as i32 + dy;
 
-                            if nx >= 2
-                                && nx < (width as i32 - 2)
-                                && ny >= 2
-                                && ny < (effective_height as i32 - 2)
+                            if nx >= x_start as i32
+                                && nx < x_end as i32
+                                && ny >= y_start as i32
+                                && ny < y_end as i32
                             {
                                 let unx = nx as u32;
                                 let uny = ny as u32;
@@ -166,7 +180,7 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
                 let delta = ((mu_xx - mu_yy).powi(2) + 4.0 * mu_xy * mu_xy).sqrt();
                 let lambda1 = (mu_xx + mu_yy + delta) / 2.0;
                 let lambda2 = ((mu_xx + mu_yy - delta) / 2.0).max(1e-4);
-                let elongation = (lambda1 / lambda2).sqrt();
+                let elongation = (lambda1 / lambda2).sqrt().max(1.0);
 
                 if elongation > settings.max_elongation {
                     rejected_blobs += 1;
@@ -206,15 +220,18 @@ fn detect_horizon_y(img: &GrayImage) -> Option<u32> {
     if height < 100 {
         return None;
     }
+    if width < 15 {
+        return None;
+    }
 
     let start_y = (height as f64 * 0.4) as u32;
 
-    for y in (start_y..height - 10).rev() {
+    for y in (start_y..height.saturating_sub(10)).rev() {
         let mut row_sum = 0.0;
         let mut row_sq_sum = 0.0;
         let mut edge_sum = 0.0;
 
-        for x in (5..width - 5).step_by(4) {
+        for x in (5..width.saturating_sub(5)).step_by(4) {
             let val = img.get_pixel(x, y)[0] as f64;
             let val_above = img.get_pixel(x, y - 2)[0] as f64;
             let diff = (val - val_above).abs();
@@ -224,7 +241,7 @@ fn detect_horizon_y(img: &GrayImage) -> Option<u32> {
             edge_sum += diff;
         }
 
-        let count = ((width - 10) / 4) as f64;
+        let count = ((width.saturating_sub(10)) / 4).max(1) as f64;
         let mean = row_sum / count;
         let variance = (row_sq_sum / count) - (mean * mean);
         let avg_edge = edge_sum / count;
@@ -251,11 +268,11 @@ fn estimate_background(img: &GrayImage, max_y: u32) -> (f64, f64) {
         return (10.0, 2.0);
     }
 
-    pixels.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    pixels.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median = pixels[pixels.len() / 2];
 
     let mut mads: Vec<f64> = pixels.iter().map(|p| (p - median).abs()).collect();
-    mads.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    mads.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mad = mads[mads.len() / 2];
 
     let std_dev = mad * 1.4826;

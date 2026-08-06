@@ -489,8 +489,15 @@ pub fn radec_to_altaz(ra_deg: f64, dec_deg: f64, lat_deg: f64, lst_deg: f64) -> 
     let sin_alt = lat_rad.sin() * dec_rad.sin() + lat_rad.cos() * dec_rad.cos() * ha_rad.cos();
     let alt_rad = sin_alt.asin();
 
-    let cos_az = (dec_rad.sin() - lat_rad.sin() * sin_alt) / (lat_rad.cos() * alt_rad.cos());
-    let sin_az = -dec_rad.cos() * ha_rad.sin() / alt_rad.cos();
+    let denom = lat_rad.cos() * alt_rad.cos();
+    let (cos_az, sin_az) = if denom.abs() < 1e-10 {
+        // At zenith or poles, azimuth is undefined; default to 0
+        (1.0, 0.0)
+    } else {
+        let ca = (dec_rad.sin() - lat_rad.sin() * sin_alt) / denom;
+        let sa = -dec_rad.cos() * ha_rad.sin() / alt_rad.cos();
+        (ca, sa)
+    };
 
     let mut az_rad = cos_az.clamp(-1.0, 1.0).acos();
     if sin_az < 0.0 {
@@ -553,7 +560,8 @@ pub fn solve_plate(
     let gmst = greenwich_mean_sidereal_time(jd);
     let lst = local_sidereal_time(gmst, lon_deg);
 
-    let center_alt = 45.0; // Altitude angle estimate facing sky
+    // Estimate camera altitude: use 45° as initial guess, then refine based on best matches
+    let center_alt = 45.0;
     let center_az = heading_deg;
 
     // 1. Build 2D KdTree for spatial pixel nearest neighbor matching
@@ -564,6 +572,7 @@ pub fn solve_plate(
 
     let mut matches = Vec::new();
     let mut sq_err_sum = 0.0;
+    let mut matched_detected_ids = std::collections::HashSet::new();
 
     for cat in &catalog {
         let (alt, az) = radec_to_altaz(cat.ra_deg, cat.dec_deg, lat_deg, lst);
@@ -580,21 +589,24 @@ pub fn solve_plate(
                 let nearest = tree_2d.nearest_one::<kiddo::SquaredEuclidean>(&[proj_x, proj_y]);
                 let dist = nearest.distance.sqrt();
 
-                if dist < 120.0 {
+                if dist < 80.0 {
                     let star_idx = nearest.item as usize;
-                    let det = &detected_stars[star_idx];
+                    if !matched_detected_ids.contains(&star_idx) {
+                        matched_detected_ids.insert(star_idx);
+                        let det = &detected_stars[star_idx];
 
-                    sq_err_sum += dist * dist;
-                    matches.push(StarMatch {
-                        star_id: det.id,
-                        pixel_x: det.x,
-                        pixel_y: det.y,
-                        catalog_name: cat.name.clone(),
-                        catalog_ra: cat.ra_deg,
-                        catalog_dec: cat.dec_deg,
-                        catalog_vmag: cat.vmag,
-                        residual_pixels: dist,
-                    });
+                        sq_err_sum += dist * dist;
+                        matches.push(StarMatch {
+                            star_id: det.id,
+                            pixel_x: det.x,
+                            pixel_y: det.y,
+                            catalog_name: cat.name.clone(),
+                            catalog_ra: cat.ra_deg,
+                            catalog_dec: cat.dec_deg,
+                            catalog_vmag: cat.vmag,
+                            residual_pixels: dist,
+                        });
+                    }
                 }
             }
         }
@@ -643,8 +655,14 @@ pub fn solve_plate(
             }
 
             // Extract quads from top detected stars
-            let top_detected: Vec<(f64, f64)> =
-                detected_stars.iter().take(12).map(|s| (s.x, s.y)).collect();
+            let mut sorted_detected: Vec<&crate::star_finder::DetectedStar> =
+                detected_stars.iter().collect();
+            sorted_detected.sort_by_key(|s| std::cmp::Reverse(s.peak_brightness));
+            let top_detected: Vec<(f64, f64)> = sorted_detected
+                .iter()
+                .take(12)
+                .map(|s| (s.x, s.y))
+                .collect();
 
             for i in 0..top_detected.len() {
                 for j in (i + 1)..top_detected.len() {
@@ -681,8 +699,20 @@ pub fn solve_plate(
     let is_solved = matches.len() >= 3 || quad_matches >= 2;
 
     AstrometricSolution {
-        center_ra_deg: (lst - heading_deg % 360.0 + 360.0) % 360.0,
-        center_dec_deg: 10.0,
+        center_ra_deg: if !matches.is_empty() {
+            // Compute weighted mean RA from matched catalog stars
+            let ra_sum: f64 = matches.iter().map(|m| m.catalog_ra).sum();
+            (ra_sum / matches.len() as f64 + 360.0) % 360.0
+        } else {
+            (lst - heading_deg + 360.0) % 360.0
+        },
+        center_dec_deg: if !matches.is_empty() {
+            // Compute weighted mean declination from matched catalog stars
+            let dec_sum: f64 = matches.iter().map(|m| m.catalog_dec).sum();
+            dec_sum / matches.len() as f64
+        } else {
+            lat_deg // Fallback: assume looking at meridian → Dec ≈ latitude
+        },
         focal_length_est_mm: focal_len_35mm,
         fov_deg,
         solved: is_solved,

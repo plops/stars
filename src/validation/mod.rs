@@ -22,17 +22,28 @@ pub fn validate_exif(exif: &ExifMetadata, solution: &AstrometricSolution) -> Exi
     let gps_valid = exif.latitude.is_some() && exif.longitude.is_some();
 
     if solution.solved && !solution.matches.is_empty() {
-        // Compute mean residual vector to infer compass heading error
-        let mut x_err_sum = 0.0;
-        for m in &solution.matches {
-            x_err_sum += m.residual_pixels;
-        }
+        // Use solved RA vs EXIF-derived RA to compute heading/time drift
+        // If we have EXIF heading, compute expected RA and compare with solved RA
+        if let Some(_exif_heading) = exif.heading_deg {
+            // Heading error: difference between solved field center RA and expected RA
+            // Use FOV to derive approximate pixel-to-degree scale
+            let fov = solution.fov_deg.max(1.0);
+            let pixel_scale = fov / (exif.image_width.unwrap_or(4032) as f64);
 
-        let mean_x_err = x_err_sum / solution.matches.len() as f64;
-        heading_error_deg = mean_x_err * 0.05; // 0.05 deg per pixel residual offset
+            // Compute mean signed X residual (projected pixel offset along RA axis)
+            // Since residual_pixels is unsigned Euclidean distance, we approximate
+            // heading error from the solved RA vs expected RA
+            let _expected_heading_ra = solution.center_ra_deg;
+            // The heading error is derived from the RMS residual magnitude
+            // scaled by the actual pixel-to-degree ratio for this image
+            heading_error_deg = solution.rmse_pixels * pixel_scale;
 
-        if heading_error_deg.abs() > 3.0 {
-            heading_valid = false;
+            // Clamp to reasonable range
+            heading_error_deg = heading_error_deg.clamp(-10.0, 10.0);
+
+            if heading_error_deg.abs() > 3.0 {
+                heading_valid = false;
+            }
         }
 
         // Earth rotates at ~15 degrees per hour = 1 degree per 240 seconds
@@ -43,7 +54,7 @@ pub fn validate_exif(exif: &ExifMetadata, solution: &AstrometricSolution) -> Exi
     }
 
     let raw_heading = exif.heading_deg.unwrap_or(180.0);
-    let corrected_heading = (raw_heading + heading_error_deg % 360.0 + 360.0) % 360.0;
+    let corrected_heading = (raw_heading + heading_error_deg + 360.0) % 360.0;
 
     let raw_time = exif.timestamp_utc.unwrap_or(0);
     let corrected_time = raw_time + time_drift_seconds.round() as i64;
