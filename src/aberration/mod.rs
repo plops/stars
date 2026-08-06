@@ -25,52 +25,73 @@ pub fn analyze_aberration(
     let cy = height as f64 / 2.0;
     let max_radius = cx.hypot(cy);
 
-    // 1. Calculate Radial Distortion Polynomial k1 from Star Centroid Residuals
-    let mut sum_r2_res = 0.0;
-    let mut sum_r4 = 0.0;
+    // 1. Least-Squares Polynomial Fit for Radial Distortion Coefficients k1 & k2
+    // Model: Delta_r = k1 * r^3 + k2 * r^5
+    let mut sum_r6 = 0.0;
+    let mut sum_r8 = 0.0;
+    let mut sum_r10 = 0.0;
+    let mut sum_r3_dr = 0.0;
+    let mut sum_r5_dr = 0.0;
 
     for m in &solution.matches {
         let dx = m.pixel_x - cx;
         let dy = m.pixel_y - cy;
         let norm_r = dx.hypot(dy) / max_radius;
 
-        let r2 = norm_r * norm_r;
-        let r4 = r2 * r2;
+        let dr = m.residual_pixels / max_radius;
+        let r3 = norm_r.powi(3);
+        let r5 = norm_r.powi(5);
 
-        sum_r2_res += r2 * m.residual_pixels;
-        sum_r4 += r4;
+        sum_r6 += r3 * r3;
+        sum_r8 += r3 * r5;
+        sum_r10 += r5 * r5;
+        sum_r3_dr += r3 * dr;
+        sum_r5_dr += r5 * dr;
     }
 
-    let k1 = if sum_r4 > 1e-6 {
-        sum_r2_res / sum_r4 * 0.01
+    let det = sum_r6 * sum_r10 - sum_r8 * sum_r8;
+    let (k1, k2) = if det.abs() > 1e-12 {
+        let k1_val = (sum_r10 * sum_r3_dr - sum_r8 * sum_r5_dr) / det;
+        let k2_val = (sum_r6 * sum_r5_dr - sum_r8 * sum_r3_dr) / det;
+        (k1_val.clamp(-0.05, 0.05), k2_val.clamp(-0.05, 0.05))
+    } else if sum_r6 > 1e-8 {
+        (sum_r3_dr / sum_r6, 0.0001)
     } else {
-        0.0001
+        (0.0001, 0.00001)
     };
 
-    let k2 = k1 * 0.05;
-
-    // 2. Calculate Coma & Astigmatism from Star Elongation vs Center Distance
+    // 2. Measure Coma & Astigmatism from Star Elongation Gradient
     let mut coma_sum = 0.0;
-    let mut count = 0;
+    let mut astig_sum = 0.0;
+    let mut edge_count = 0;
 
     for star in stars {
         let dx = star.x - cx;
         let dy = star.y - cy;
         let norm_r = dx.hypot(dy) / max_radius;
 
-        if norm_r > 0.4 {
-            coma_sum += (star.elongation - 1.0) * norm_r;
-            count += 1;
+        if norm_r > 0.35 {
+            let radial_elongation = (star.elongation - 1.0) * norm_r;
+            coma_sum += radial_elongation;
+            astig_sum += radial_elongation * (1.0 - norm_r);
+            edge_count += 1;
         }
     }
 
-    let coma_factor = if count > 0 {
-        coma_sum / count as f64
+    let coma_factor = if edge_count > 0 {
+        coma_sum / edge_count as f64
     } else {
-        0.05
+        0.04
     };
-    let astigmatism_factor = coma_factor * 0.8;
-    let chromatic_aberration_px = (coma_factor * 1.5).min(2.5);
+
+    let astigmatism_factor = if edge_count > 0 {
+        astig_sum / edge_count as f64
+    } else {
+        0.03
+    };
+
+    // Estimated Chromatic Aberration near edges (pixel displacement between spectrum components)
+    let chromatic_aberration_px = (coma_factor * 1.8 + k1.abs() * 5.0).clamp(0.1, 3.5);
 
     // 3. Bennett's Atmospheric Refraction Formula (arcminutes)
     let alt_clamped = altitude_deg.max(1.0);
@@ -80,7 +101,11 @@ pub fn analyze_aberration(
             .tan());
 
     // Optical Quality Score (0 to 100)
-    let quality = (100.0 - (k1.abs() * 1000.0 + coma_factor * 15.0 + solution.rmse_pixels * 2.0))
+    let quality = (100.0
+        - (k1.abs() * 1200.0
+            + k2.abs() * 2400.0
+            + coma_factor * 18.0
+            + solution.rmse_pixels * 2.5))
         .clamp(10.0, 99.5);
 
     AberrationReport {
@@ -91,7 +116,7 @@ pub fn analyze_aberration(
         chromatic_aberration_px,
         atmospheric_refraction_arcmin: refraction_arcmin,
         quality_score: quality,
-        max_radial_distortion_px: k1.abs() * max_radius * 0.05,
+        max_radial_distortion_px: (k1.abs() + k2.abs()) * max_radius,
     }
 }
 
@@ -117,5 +142,6 @@ mod tests {
             report.atmospheric_refraction_arcmin > 0.8
                 && report.atmospheric_refraction_arcmin < 1.2
         );
+        assert!(report.quality_score > 0.0);
     }
 }

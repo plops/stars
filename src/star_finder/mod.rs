@@ -1,5 +1,6 @@
 use image::GrayImage;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectedStar {
@@ -25,10 +26,10 @@ pub struct DetectionSettings {
 impl Default for DetectionSettings {
     fn default() -> Self {
         Self {
-            sigma_threshold: 2.5,
+            sigma_threshold: 2.2,
             min_area: 2,
             max_area: 500,
-            max_elongation: 2.8,
+            max_elongation: 3.2,
             mask_horizon: true,
         }
     }
@@ -57,167 +58,135 @@ pub fn detect_stars(img: &GrayImage, settings: &DetectionSettings) -> DetectionR
 
     // 2. Global Sky Background Stats
     let (global_bg_mean, global_bg_std) = estimate_background(img, effective_height);
+    let global_noise_floor = global_bg_mean + 1.5 * global_bg_std;
 
-    // Absolute Noise Floor for Genuine Astronomical Stars
-    let global_noise_floor = global_bg_mean + 1.8 * global_bg_std;
-
-    // 3. Construct Adaptive Local Background Grid (16x12 Mesh)
-    let grid_cols = 16u32;
-    let grid_rows = 12u32;
-    let cell_w = (width / grid_cols).max(1);
-    let cell_h = (effective_height / grid_rows).max(1);
-
-    let mut local_means = vec![global_bg_mean; (grid_cols * grid_rows) as usize];
-    let mut local_stds = vec![global_bg_std; (grid_cols * grid_rows) as usize];
-
-    for gy in 0..grid_rows {
-        for gx in 0..grid_cols {
-            let start_x = gx * cell_w;
-            let end_x = ((gx + 1) * cell_w).min(width);
-            let start_y = gy * cell_h;
-            let end_y = ((gy + 1) * cell_h).min(effective_height);
-
-            let mut cell_pixels = Vec::new();
-            for y in (start_y..end_y).step_by(2) {
-                for x in (start_x..end_x).step_by(2) {
-                    cell_pixels.push(img.get_pixel(x, y)[0] as f64);
-                }
-            }
-
-            if !cell_pixels.is_empty() {
-                cell_pixels.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                let median = cell_pixels[cell_pixels.len() / 2];
-
-                let mut mads: Vec<f64> = cell_pixels.iter().map(|p| (p - median).abs()).collect();
-                mads.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                let mad = mads[mads.len() / 2];
-                let std_dev = (mad * 1.4826).max(1.5);
-
-                let g_idx = (gy * grid_cols + gx) as usize;
-                local_means[g_idx] = median;
-                local_stds[g_idx] = std_dev;
-            }
-        }
-    }
-
-    // 4. Scan Image for Genuine Astronomical Stars
+    // 3. Construct Threshold Mask & Connected Component Region Growing
+    let threshold = global_bg_mean + settings.sigma_threshold * global_bg_std;
+    let mut visited = vec![false; (width * effective_height) as usize];
     let mut stars = Vec::new();
     let mut rejected_blobs = 0;
 
     for y in 2..(effective_height - 2) {
-        let gy = (y / cell_h).min(grid_rows - 1);
         for x in 2..(width - 2) {
-            let gx = (x / cell_w).min(grid_cols - 1);
-            let g_idx = (gy * grid_cols + gx) as usize;
-            let bg_m = local_means[g_idx];
-            let bg_s = local_stds[g_idx];
-
-            let local_threshold = bg_m + settings.sigma_threshold * bg_s;
-            let val = img.get_pixel(x, y)[0] as f64;
-
-            // Global Noise Floor Filter: Must exceed global noise floor (eliminates tree foliage noise)
-            if val < global_noise_floor {
+            let idx = (y * width + x) as usize;
+            if visited[idx] {
                 continue;
             }
 
-            // Strict 3x3 Local Maximum Peak
-            if val >= local_threshold
-                && val > img.get_pixel(x - 1, y)[0] as f64
-                && val > img.get_pixel(x + 1, y)[0] as f64
-                && val > img.get_pixel(x, y - 1)[0] as f64
-                && val > img.get_pixel(x, y + 1)[0] as f64
-                && val >= img.get_pixel(x - 1, y - 1)[0] as f64
-                && val >= img.get_pixel(x + 1, y - 1)[0] as f64
-                && val >= img.get_pixel(x - 1, y + 1)[0] as f64
-                && val >= img.get_pixel(x + 1, y + 1)[0] as f64
-            {
-                // Calculate 3x3 Surrounding Average for Point-Source PSF Sharpness
-                let mut surround_sum = 0.0;
-                let mut surround_count = 0.0;
+            let val = img.get_pixel(x, y)[0] as f64;
+            if val >= threshold && val >= global_noise_floor {
+                // BFS Connected Component Extraction
+                let mut queue = VecDeque::new();
+                queue.push_back((x, y));
+                visited[idx] = true;
 
-                for ny in (y - 1)..=(y + 1) {
-                    for nx in (x - 1)..=(x + 1) {
-                        if nx != x || ny != y {
-                            surround_sum += img.get_pixel(nx, ny)[0] as f64;
-                            surround_count += 1.0;
+                let mut component = Vec::new();
+                let mut max_val = 0u8;
+
+                while let Some((cx, cy)) = queue.pop_front() {
+                    let pixel_val = img.get_pixel(cx, cy)[0];
+                    if pixel_val > max_val {
+                        max_val = pixel_val;
+                    }
+                    component.push((cx, cy, pixel_val as f64));
+
+                    for dy in -1..=1 {
+                        for dx in -1..=1 {
+                            if dx == 0 && dy == 0 {
+                                continue;
+                            }
+                            let nx = cx as i32 + dx;
+                            let ny = cy as i32 + dy;
+
+                            if nx >= 2
+                                && nx < (width as i32 - 2)
+                                && ny >= 2
+                                && ny < (effective_height as i32 - 2)
+                            {
+                                let unx = nx as u32;
+                                let uny = ny as u32;
+                                let nidx = (uny * width + unx) as usize;
+
+                                if !visited[nidx] {
+                                    let nval = img.get_pixel(unx, uny)[0] as f64;
+                                    if nval >= global_noise_floor {
+                                        visited[nidx] = true;
+                                        queue.push_back((unx, uny));
+                                    }
+                                }
+                            }
                         }
                     }
                 }
 
-                let surround_avg = surround_sum / surround_count;
-                let peak_signal = val - bg_m;
-                let surround_signal = (surround_avg - bg_m).max(0.1);
-
-                // PSF Sharpness Test: Peak must be brighter than surrounding border
-                let sharpness_ratio = peak_signal / surround_signal;
-                if sharpness_ratio < 1.02 {
+                // Filter components by pixel area bounds
+                if component.len() < settings.min_area || component.len() > settings.max_area {
                     rejected_blobs += 1;
                     continue;
                 }
 
-                // Sub-pixel 3x3 Centroid (Barycenter) calculation
-                let mut sum_i = 0.0;
+                // Calculate intensity-weighted barycenter centroid
+                let mut total_weight = 0.0;
                 let mut sum_x = 0.0;
                 let mut sum_y = 0.0;
 
-                for ny in (y - 1)..=(y + 1) {
-                    for nx in (x - 1)..=(x + 1) {
-                        let pval = img.get_pixel(nx, ny)[0] as f64;
-                        let weight = (pval - bg_m).max(0.1);
-                        sum_i += weight;
-                        sum_x += nx as f64 * weight;
-                        sum_y += ny as f64 * weight;
-                    }
+                for &(px, py, pval) in &component {
+                    let weight = (pval - global_bg_mean).max(0.1);
+                    total_weight += weight;
+                    sum_x += px as f64 * weight;
+                    sum_y += py as f64 * weight;
                 }
 
-                if sum_i > 0.0 {
-                    let sub_x = sum_x / sum_i;
-                    let sub_y = sum_y / sum_i;
-
-                    // Calculate Second Moments for Elongation & FWHM
-                    let mut mu_xx = 0.0;
-                    let mut mu_yy = 0.0;
-                    let mut mu_xy = 0.0;
-
-                    for ny in (y - 1)..=(y + 1) {
-                        for nx in (x - 1)..=(x + 1) {
-                            let pval = img.get_pixel(nx, ny)[0] as f64;
-                            let weight = (pval - bg_m).max(0.1);
-                            let dx = nx as f64 - sub_x;
-                            let dy = ny as f64 - sub_y;
-                            mu_xx += dx * dx * weight;
-                            mu_yy += dy * dy * weight;
-                            mu_xy += dx * dy * weight;
-                        }
-                    }
-
-                    mu_xx /= sum_i;
-                    mu_yy /= sum_i;
-                    mu_xy /= sum_i;
-
-                    let delta = ((mu_xx - mu_yy).powi(2) + 4.0 * mu_xy * mu_xy).sqrt();
-                    let lambda1 = (mu_xx + mu_yy + delta) / 2.0;
-                    let lambda2 = ((mu_xx + mu_yy - delta) / 2.0).max(1e-4);
-                    let elongation = (lambda1 / lambda2).sqrt();
-
-                    if elongation <= settings.max_elongation {
-                        let fwhm = 2.355 * (lambda1 + lambda2).sqrt() / std::f64::consts::SQRT_2;
-                        let snr = peak_signal / bg_s.max(1.0);
-
-                        stars.push(DetectedStar {
-                            id: stars.len() + 1,
-                            x: sub_x,
-                            y: sub_y,
-                            intensity: sum_i,
-                            peak_brightness: val as u8,
-                            fwhm: fwhm.clamp(1.2, 8.0),
-                            snr,
-                            elongation,
-                        });
-                    } else {
-                        rejected_blobs += 1;
-                    }
+                if total_weight <= 0.0 {
+                    rejected_blobs += 1;
+                    continue;
                 }
+
+                let sub_x = sum_x / total_weight;
+                let sub_y = sum_y / total_weight;
+
+                // Compute second moments for elongation and FWHM
+                let mut mu_xx = 0.0;
+                let mut mu_yy = 0.0;
+                let mut mu_xy = 0.0;
+
+                for &(px, py, pval) in &component {
+                    let weight = (pval - global_bg_mean).max(0.1);
+                    let dx = px as f64 - sub_x;
+                    let dy = py as f64 - sub_y;
+                    mu_xx += dx * dx * weight;
+                    mu_yy += dy * dy * weight;
+                    mu_xy += dx * dy * weight;
+                }
+
+                mu_xx /= total_weight;
+                mu_yy /= total_weight;
+                mu_xy /= total_weight;
+
+                let delta = ((mu_xx - mu_yy).powi(2) + 4.0 * mu_xy * mu_xy).sqrt();
+                let lambda1 = (mu_xx + mu_yy + delta) / 2.0;
+                let lambda2 = ((mu_xx + mu_yy - delta) / 2.0).max(1e-4);
+                let elongation = (lambda1 / lambda2).sqrt();
+
+                if elongation > settings.max_elongation {
+                    rejected_blobs += 1;
+                    continue;
+                }
+
+                let fwhm = (2.355 * (lambda1 + lambda2).sqrt() / std::f64::consts::SQRT_2)
+                    .clamp(1.0, 10.0);
+                let snr = (max_val as f64 - global_bg_mean) / global_bg_std.max(1.0);
+
+                stars.push(DetectedStar {
+                    id: stars.len() + 1,
+                    x: sub_x,
+                    y: sub_y,
+                    intensity: total_weight,
+                    peak_brightness: max_val,
+                    fwhm,
+                    snr,
+                    elongation,
+                });
             }
         }
     }

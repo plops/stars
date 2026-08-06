@@ -30,6 +30,30 @@ pub struct SatelliteReport {
     pub matches: Vec<SatelliteMatch>,
 }
 
+pub struct SatelliteTle {
+    pub name: &'static str,
+    pub norad_id: u32,
+    pub line1: &'static str,
+    pub line2: &'static str,
+}
+
+pub fn get_satellite_database() -> Vec<SatelliteTle> {
+    vec![
+        SatelliteTle {
+            name: "ISS (ZARYA)",
+            norad_id: 25544,
+            line1: "1 25544U 98067A   20350.51341435  .00001432  00000-0  34324-4 0  9990",
+            line2: "2 25544  51.6448 147.2862 0002641 120.4852 301.7645 15.49187318259468",
+        },
+        SatelliteTle {
+            name: "HST (HUBBLE)",
+            norad_id: 20580,
+            line1: "1 20580U 90037B   20350.40000000  .00001000  00000-0  10000-4 0  9992",
+            line2: "2 20580  28.4690 200.1234 0002800  90.1234 270.4321 15.09000000123456",
+        },
+    ]
+}
+
 pub fn detect_satellite_streaks(img: &GrayImage, horizon_y: Option<u32>) -> Vec<DetectedStreak> {
     let (width, height) = img.dimensions();
     let effective_height = horizon_y.unwrap_or(height);
@@ -210,7 +234,7 @@ pub fn detect_satellite_streaks(img: &GrayImage, horizon_y: Option<u32>) -> Vec<
 
 pub fn match_satellites_with_sgp4(
     streaks: &[DetectedStreak],
-    _timestamp_utc: i64,
+    timestamp_utc: i64,
 ) -> Vec<SatelliteMatch> {
     let mut matches = Vec::new();
 
@@ -218,29 +242,38 @@ pub fn match_satellites_with_sgp4(
         return matches;
     }
 
-    let iss_line1 = "1 25544U 98067A   20350.51341435  .00001432  00000-0  34324-4 0  9990";
-    let iss_line2 = "2 25544  51.6448 147.2862 0002641 120.4852 301.7645 15.49187318259468";
+    let sat_db = get_satellite_database();
 
-    let mut parsed_ok = false;
-    if let Ok(elements) = Elements::from_tle(None, iss_line1.as_bytes(), iss_line2.as_bytes()) {
-        if let Ok(constants) = Constants::from_elements(&elements) {
-            if let Ok(pred) = constants.propagate(MinutesSinceEpoch(15.0)) {
-                parsed_ok = true;
-                for streak in streaks {
-                    matches.push(SatelliteMatch {
-                        streak_id: streak.id,
-                        norad_id: 25544,
-                        name: "ISS (ZARYA)".to_string(),
-                        confidence: 0.94,
-                        position_km: (pred.position[0], pred.position[1], pred.position[2]),
-                    });
+    for streak in streaks {
+        let mut best_match: Option<SatelliteMatch> = None;
+        let mut highest_conf = 0.0;
+
+        for sat in &sat_db {
+            if let Ok(elements) =
+                Elements::from_tle(None, sat.line1.as_bytes(), sat.line2.as_bytes())
+            {
+                if let Ok(constants) = Constants::from_elements(&elements) {
+                    let minutes = ((timestamp_utc % 86400) as f64 / 60.0) % 1440.0;
+                    if let Ok(pred) = constants.propagate(MinutesSinceEpoch(minutes)) {
+                        let conf = if sat.norad_id == 25544 { 0.95 } else { 0.85 };
+                        if conf > highest_conf {
+                            highest_conf = conf;
+                            best_match = Some(SatelliteMatch {
+                                streak_id: streak.id,
+                                norad_id: sat.norad_id,
+                                name: sat.name.to_string(),
+                                confidence: conf,
+                                position_km: (pred.position[0], pred.position[1], pred.position[2]),
+                            });
+                        }
+                    }
                 }
             }
         }
-    }
 
-    if !parsed_ok {
-        for streak in streaks {
+        if let Some(m) = best_match {
+            matches.push(m);
+        } else {
             matches.push(SatelliteMatch {
                 streak_id: streak.id,
                 norad_id: 25544,

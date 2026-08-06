@@ -16,6 +16,8 @@ pub struct ExifMetadata {
     pub focal_length_in_35mm: Option<f64>,
     pub make: Option<String>,
     pub model: Option<String>,
+    pub lens_model: Option<String>,
+    pub orientation: Option<u32>,
     pub iso: Option<u32>,
     pub exposure_time: Option<f64>,
     pub f_number: Option<f64>,
@@ -36,6 +38,8 @@ impl ExifMetadata {
             focal_length_in_35mm: Some(26.0), // Standard iPhone camera ~26mm equiv
             make: Some("Apple".to_string()),
             model: Some("iPhone 15 Pro".to_string()),
+            lens_model: Some("iPhone 15 Pro back camera 6.86mm f/1.78".to_string()),
+            orientation: Some(1),
             iso: Some(1600),
             exposure_time: Some(1.0 / 3.0),
             f_number: Some(1.78),
@@ -59,7 +63,7 @@ pub fn parse_exif_from_reader<R: std::io::BufRead + Seek>(reader: &mut R) -> Res
 
     let mut meta = ExifMetadata::default();
 
-    // Camera Info
+    // Camera & Lens Info
     if let Some(field) = exif.get_field(Tag::Make, In::PRIMARY) {
         meta.make = Some(
             field
@@ -77,6 +81,22 @@ pub fn parse_exif_from_reader<R: std::io::BufRead + Seek>(reader: &mut R) -> Res
                 .trim_matches('"')
                 .to_string(),
         );
+    }
+    if let Some(field) = exif.get_field(Tag::LensModel, In::PRIMARY) {
+        meta.lens_model = Some(
+            field
+                .display_value()
+                .to_string()
+                .trim_matches('"')
+                .to_string(),
+        );
+    }
+    if let Some(field) = exif.get_field(Tag::Orientation, In::PRIMARY) {
+        if let Value::Short(ref s) = field.value {
+            if !s.is_empty() {
+                meta.orientation = Some(s[0] as u32);
+            }
+        }
     }
 
     // Focal Length
