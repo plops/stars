@@ -1,5 +1,6 @@
 # ✦ stars ✦ — iPhone Astrophotography Suite
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/plops/stars)
 [![Rust 2021](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)
 [![Axum Web Engine](https://img.shields.io/badge/Axum-0.8-blue.svg)](https://github.com/tokio-rs/axum)
 [![Ratatui TUI](https://img.shields.io/badge/Ratatui-0.30-purple.svg)](https://github.com/ratatui/ratatui)
