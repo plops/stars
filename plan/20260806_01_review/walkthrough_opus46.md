@@ -331,4 +331,96 @@ Die Tests bestehen alle, prüfen aber hauptsächlich `> 0` und `!is_empty()` —
 
 ---
 
-*Reviewed by Opus 4.6 — 2026-08-06T06:27Z*
+## 10. Implementierte Korrekturen (Commit `4a6e63b`)
+
+Alle im Review identifizierten kritischen und wichtigen Probleme wurden adressiert. Nachfolgend die umgesetzten Fixes:
+
+### 🔧 Astrometry ([`src/astrometry/mod.rs`](file:///workspace/src/stars/src/astrometry/mod.rs))
+
+| Fix | Vorher | Nachher |
+|-----|--------|---------|
+| `center_dec_deg` | Hardcoded `10.0` | Gewichteter Mittelwert der gematchten Katalog-Deklinationen |
+| `center_ra_deg` | `(lst - heading_deg % 360.0)` | Gewichteter Mittelwert der gematchten Katalog-RA |
+| Division-by-Zero | `NaN` bei Zenit/Pol | Guard: `denom.abs() < 1e-10` → Default Azimuth |
+| Duplikat-Matches | Mehrere Katalog-Sterne → gleicher DetectedStar | `HashSet<usize>` tracked gematchte IDs |
+| Matching-Radius | 120px (zu groß) | 80px (reduziert) |
+| Quad-Sortierung | Beliebige Reihenfolge | Sortiert nach `peak_brightness` (hellste zuerst) |
+
+### 🔧 Satellites ([`src/satellites/mod.rs`](file:///workspace/src/stars/src/satellites/mod.rs))
+
+| Fix | Vorher | Nachher |
+|-----|--------|---------|
+| SGP4 Zeit | `(timestamp % 86400) / 60` (Minute des Tages) | Julian Date Differenz × 1440 (Minuten seit TLE-Epoche) |
+| Satellite-DB | 2 Einträge (ISS + HST) | 4 Einträge (+Tiangong CSS, +Starlink-1007) |
+| Fake-Fallback | `(6700.0, 1200.0, 3400.0)` bei Fehler | Kein Fallback — leerer Match bei Fehler |
+| Confidence | Hardcoded per NORAD-ID | Orbital-Plausibilitätsprüfung (Erdradius-Distanz) |
+| Streak-ID | Immer `1` | Auto-increment `streaks.len() + 1` |
+
+### 🔧 Aberration ([`src/aberration/mod.rs`](file:///workspace/src/stars/src/aberration/mod.rs))
+
+| Fix | Vorher | Nachher |
+|-----|--------|---------|
+| Chromatic Aberration | `coma * 1.8 + k1 * 5.0` (Heuristik) | `measure_rgb_chromatic_aberration()` — echte R/B Centroid-Verschiebung |
+| RGB-Daten | Nicht verfügbar | Optional `Option<&RgbImage>` Parameter |
+| Coma/Astig Fallback | `0.04` / `0.03` | `0.0` / `0.0` |
+
+### 🔧 EXIF ([`src/exif/mod.rs`](file:///workspace/src/stars/src/exif/mod.rs))
+
+| Fix | Vorher | Nachher |
+|-----|--------|---------|
+| DateTime Parser | `%Y-%m-%d` (nur Bindestriche) | `%Y:%m:%d` (EXIF-Standard) mit Bindestrich-Fallback |
+| Quotes | Nicht getrimmt | `trim_matches('"')` vor Parsing |
+| GPS Division | Kein Guard | `r[i].denom != 0` für alle 3 Komponenten |
+
+### 🔧 Validation ([`src/validation/mod.rs`](file:///workspace/src/stars/src/validation/mod.rs))
+
+| Fix | Vorher | Nachher |
+|-----|--------|---------|
+| Heading Error | Unsigned Residuals × 0.05 | FOV-basierter `pixel_scale` × RMSE |
+| Pixel-to-Degree | Hardcoded `0.05°/px` | `fov_deg / image_width` |
+| Modulo Precedence | `heading_error_deg % 360.0` | `(heading + error + 360) % 360` |
+| Heading Guard | Immer berechnet | Nur wenn EXIF Heading vorhanden |
+
+### 🔧 Star Finder ([`src/star_finder/mod.rs`](file:///workspace/src/stars/src/star_finder/mod.rs))
+
+| Fix | Vorher | Nachher |
+|-----|--------|---------|
+| u32 Underflow | `height - 2` panic bei kleinen Bildern | `saturating_sub(2)` + Early Return Guard |
+| Float NaN Sort | `.unwrap()` → Panic | `.unwrap_or(Ordering::Equal)` |
+| Elongation | `0.0` für Punkt-Quellen | `.max(1.0)` |
+| Horizon Width | `width - 5` underflow | `saturating_sub(5)` + `width < 15` guard |
+
+### 🔧 Web ([`src/web/mod.rs`](file:///workspace/src/stars/src/web/mod.rs))
+
+| Fix | Vorher | Nachher |
+|-----|--------|---------|
+| RGB an Aberration | `None` | `Some(&loaded.rgb)` |
+| Upload Fehler | Stilles Synthetic-Fallback | `eprintln!` Logging |
+
+### Verifikation
+
+```text
+cargo test:    14/14 passed (11 unit + 3 integration)
+cargo clippy:  0 warnings
+cargo fmt:     compliant
+```
+
+---
+
+### Verbleibende offene Punkte
+
+Die folgenden Punkte aus dem Review sind **nicht** in diesem Commit adressiert und bleiben als Future Work:
+
+1. **Echtes Lost-in-Space Solving** — Quads unabhängig vom Initial-Guess generieren
+2. **Camera Altitude aus Gyroscope/EXIF** — statt fixiert auf 45°
+3. **Satellite Sky Projection** — ECI → AzEl → Pixel für geometrisches Matching
+4. **EXIF Orientation anwenden** — Bildrotation basierend auf Tag 0x0112
+5. **FWHM Gaussian Fit** — statt Moment-basierter Annäherung
+6. **RANSAC iterativ** — für Multi-Streak Detection
+7. **HTML aus web/mod.rs auslagern** — in Template-Dateien
+8. **`tracing` statt `println!`** — oder Crate entfernen
+
+---
+
+*Reviewed and fixed by Opus 4.6 — 2026-08-06T06:49Z*
+
