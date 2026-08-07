@@ -10,10 +10,10 @@
 
 We have resolved all image loading failures for high-resolution iPhone camera files `/workspace/src/IMG_8556.jpg` (2.79 MB JPEG) and `/workspace/src/IMG_8556.HEIC` (1.91 MB HEIC):
 
-1. **Rust HEIC Image Decoder (`src/image_loader/mod.rs`)**:
-   - Added `libheif-rs` (`2.7.0`) with `embedded-libheif` and `image` features to `Cargo.toml`.
-   - Implemented `load_heic_from_bytes()` in `src/image_loader/mod.rs` to parse HEIF container structures and decode uncompressed RGB frame buffers into `LoadedImage` structs.
-   - Added a robust Python fallback (`decode_heic_via_python`) using `pillow-heif` for HEVC compressed frames when native decoder plugins are unavailable.
+1. **Pure-Rust HEIC Image Decoder (`src/image_loader/mod.rs`)**:
+   - Added `heif-oxide` (`0.1.0`) to `Cargo.toml` — a 100% pure-Rust HEIF container parser and HEVC decoder (`rust_h265`).
+   - Replaced path-dependent Python script fallbacks with native `heif_oxide::decode_bytes(bytes)` decoding in `src/image_loader/mod.rs`.
+   - Now works standalone in any directory or build environment (`target/release/stars --web` or CLI) without relying on external Python virtual environments or system C libraries.
 
 2. **Axum Web Server Payload Limit Fix (`src/web/mod.rs`)**:
    - Identified that Axum's default `DefaultBodyLimit` is 2 MB (2,097,152 bytes), causing uploads of `IMG_8556.jpg` (2.79 MB) to fail with HTTP `413 Payload Too Large`.

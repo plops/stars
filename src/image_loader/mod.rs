@@ -257,9 +257,13 @@ fn decode_heic_via_python(bytes: &[u8]) -> Result<Vec<u8>> {
     use std::process::{Command, Stdio};
 
     let script = r#"
-import sys, io, pillow_heif
+import sys, io
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except ImportError:
+    pass
 from PIL import Image
-pillow_heif.register_heif_opener()
 data = sys.stdin.buffer.read()
 img = Image.open(io.BytesIO(data)).convert('RGB')
 out = io.BytesIO()
@@ -267,42 +271,68 @@ img.save(out, format='PNG')
 sys.stdout.buffer.write(out.getvalue())
 "#;
 
-    let venv_python = Path::new("/workspace/src/stars/python_prototype/.venv/bin/python");
-    let mut child = if venv_python.exists() {
-        Command::new(venv_python)
+    let candidates = [
+        "python3",
+        "python",
+        "./python_prototype/.venv/bin/python",
+        "../python_prototype/.venv/bin/python",
+        "/workspace/src/stars/python_prototype/.venv/bin/python",
+    ];
+
+    for bin in &candidates {
+        if let Ok(mut child) = Command::new(bin)
             .arg("-c")
             .arg(script)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .context("Failed to spawn python process")?
-    } else {
-        Command::new("python3")
-            .arg("-c")
-            .arg(script)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context("Failed to spawn python3 process")?
-    };
-
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(bytes)?;
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(bytes);
+            }
+            if let Ok(output) = child.wait_with_output() {
+                if output.status.success() && !output.stdout.is_empty() {
+                    return Ok(output.stdout);
+                }
+            }
+        }
     }
 
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        let err_msg = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Python HEIC decoder process failed: {}", err_msg);
-    }
-
-    Ok(output.stdout)
+    anyhow::bail!("All HEIC decoder options failed")
 }
 
 pub fn load_heic_from_bytes(name: &str, bytes: &[u8]) -> Result<LoadedImage> {
-    // 1. Try native libheif-rs decode
+    // 1. Try pure-Rust heif-oxide decoder (decodes iPhone HEVC HEIC images natively)
+    if let Ok(decoded) = heif_oxide::decode_bytes(bytes) {
+        let width = decoded.width;
+        let height = decoded.height;
+        let rgba = decoded.to_rgba8();
+        let mut rgb = RgbImage::new(width, height);
+        for y in 0..height {
+            for x in 0..width {
+                let idx = ((y * width + x) * 4) as usize;
+                if idx + 2 < rgba.len() {
+                    rgb.put_pixel(x, y, Rgb([rgba[idx], rgba[idx + 1], rgba[idx + 2]]));
+                }
+            }
+        }
+        let gray = image::DynamicImage::ImageRgb8(rgb.clone()).to_luma8();
+        let mut exif = parse_exif_bytes(bytes).unwrap_or_default();
+        exif.image_width = Some(width);
+        exif.image_height = Some(height);
+
+        return Ok(LoadedImage {
+            name: name.to_string(),
+            width,
+            height,
+            gray,
+            rgb,
+            exif,
+        });
+    }
+
+    // 2. Try native libheif-rs decode
     let native_decode_result: Result<(RgbImage, u32, u32)> = (|| {
         let ctx = libheif_rs::HeifContext::read_from_bytes(bytes)?;
         let handle = ctx.primary_image_handle()?;
@@ -334,9 +364,9 @@ pub fn load_heic_from_bytes(name: &str, bytes: &[u8]) -> Result<LoadedImage> {
     let (rgb, width, height) = match native_decode_result {
         Ok(res) => res,
         Err(_) => {
-            // 2. Fallback to python pillow-heif if native HEVC plugin missing
+            // 3. Fallback to python pillow-heif if available
             let png_bytes = decode_heic_via_python(bytes)
-                .with_context(|| format!("Failed to decode HEIF image via Python pillow_heif for {}", name))?;
+                .with_context(|| format!("Failed to decode HEIF image via pure Rust or Python for {}", name))?;
             let dyn_img = image::load_from_memory(&png_bytes)?;
             let (w, h) = dyn_img.dimensions();
             (dyn_img.to_rgb8(), w, h)
