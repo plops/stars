@@ -2,3 +2,5 @@
 sample_analysis.json
 #*#
 *~
+*.png
+python_prototype/.venv/
