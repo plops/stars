@@ -44,15 +44,16 @@ Serial task list for implementation. Each task should be completed, tested, and 
 
 
 ## Task 4: Atmospheric Refraction Integration
-- [ ] Create `pub fn atmospheric_refraction_correction(alt_deg: f64) -> f64` in `aberration/mod.rs`
+- [x] Create `pub fn atmospheric_refraction_correction(alt_deg: f64) -> f64` in `aberration/mod.rs`
   - Bennett's formula returning correction in degrees
   - Handle edge cases: alt < 0° → return 0, alt = 0° → clamp to horizon refraction
-- [ ] Integrate into `altaz_to_pixel()`: apply refraction correction to altitude before projection
-- [ ] Option to enable/disable refraction correction
-- [ ] **Test**: `cargo test test_refraction_at_horizon` — verify ~34 arcmin at 0°
-- [ ] **Test**: `cargo test test_refraction_at_zenith` — verify ~0 arcmin at 90°
-- [ ] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
-- [ ] **Commit**: `feat(aberration): integrate atmospheric refraction correction into projection pipeline`
+- [x] Integrate into `altaz_to_pixel()`: apply refraction correction to altitude before projection
+- [x] Option to enable/disable refraction correction
+- [x] **Test**: `cargo test test_refraction_at_horizon` — verify ~34 arcmin at 0°
+- [x] **Test**: `cargo test test_refraction_at_zenith` — verify ~0 arcmin at 90°
+- [x] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
+- [x] **Commit**: `feat(aberration): integrate atmospheric refraction correction into projection pipeline`
+
 
 ## Task 5: Signed Residual Analysis in Validation
 - [ ] Modify `StarMatch` to include signed residuals `dx_pixels` and `dy_pixels` (not just unsigned distance)

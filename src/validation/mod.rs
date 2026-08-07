@@ -22,28 +22,18 @@ pub fn validate_exif(exif: &ExifMetadata, solution: &AstrometricSolution) -> Exi
     let gps_valid = exif.latitude.is_some() && exif.longitude.is_some();
 
     if solution.solved && !solution.matches.is_empty() {
-        // Use solved RA vs EXIF-derived RA to compute heading/time drift
-        // If we have EXIF heading, compute expected RA and compare with solved RA
-        if let Some(_exif_heading) = exif.heading_deg {
-            // Heading error: difference between solved field center RA and expected RA
-            // Use FOV to derive approximate pixel-to-degree scale
-            let fov = solution.fov_deg.max(1.0);
-            let pixel_scale = fov / (exif.image_width.unwrap_or(4032) as f64);
+        let fov = solution.fov_deg.max(1.0);
+        let img_w = exif.image_width.unwrap_or(4032) as f64;
+        let pixel_scale = fov / img_w;
 
-            // Compute mean signed X residual (projected pixel offset along RA axis)
-            // Since residual_pixels is unsigned Euclidean distance, we approximate
-            // heading error from the solved RA vs expected RA
-            let _expected_heading_ra = solution.center_ra_deg;
-            // The heading error is derived from the RMS residual magnitude
-            // scaled by the actual pixel-to-degree ratio for this image
-            heading_error_deg = solution.rmse_pixels * pixel_scale;
+        let mean_dx: f64 = solution.matches.iter().map(|m| m.dx_pixels).sum::<f64>()
+            / solution.matches.len() as f64;
 
-            // Clamp to reasonable range
-            heading_error_deg = heading_error_deg.clamp(-10.0, 10.0);
+        // Systematic heading error derived from mean signed X-residual
+        heading_error_deg = (mean_dx * pixel_scale).clamp(-10.0, 10.0);
 
-            if heading_error_deg.abs() > 3.0 {
-                heading_valid = false;
-            }
+        if heading_error_deg.abs() > 3.0 {
+            heading_valid = false;
         }
 
         // Earth rotates at ~15 degrees per hour = 1 degree per 240 seconds
@@ -60,9 +50,15 @@ pub fn validate_exif(exif: &ExifMetadata, solution: &AstrometricSolution) -> Exi
     let corrected_time = raw_time + time_drift_seconds.round() as i64;
 
     let summary = if timestamp_valid && heading_valid {
-        format!("EXIF metadata verified cleanly. Timestamp drift: {:.1}s, Compass heading error: {:.2}°", time_drift_seconds, heading_error_deg)
+        format!(
+            "EXIF metadata verified cleanly. Timestamp drift: {:.1}s, Compass heading error: {:.2}°",
+            time_drift_seconds, heading_error_deg
+        )
     } else {
-        format!("EXIF drift detected! Recommended adjustments: time offset {:.1}s, heading adjustment {:.2}°", time_drift_seconds, heading_error_deg)
+        format!(
+            "EXIF drift detected! Recommended adjustments: time offset {:.1}s, heading adjustment {:.2}°",
+            time_drift_seconds, heading_error_deg
+        )
     };
 
     ExifValidationReport {
@@ -99,5 +95,68 @@ mod tests {
         let report = validate_exif(&exif, &solution);
         assert!(report.gps_valid);
         assert_eq!(report.heading_error_deg, 0.0);
+    }
+
+    #[test]
+    fn test_signed_residuals() {
+        use crate::astrometry::StarMatch;
+
+        let exif = ExifMetadata {
+            heading_deg: Some(180.0),
+            image_width: Some(1000),
+            image_height: Some(1000),
+            ..ExifMetadata::dummy_iphone_metadata()
+        };
+
+        let matches = vec![
+            StarMatch {
+                star_id: 1,
+                pixel_x: 533.333,
+                pixel_y: 500.0,
+                catalog_name: "Star 1".into(),
+                catalog_ra: 100.0,
+                catalog_dec: 0.0,
+                catalog_vmag: 2.0,
+                residual_pixels: 33.333,
+                dx_pixels: 33.333,
+                dy_pixels: 0.0,
+            },
+            StarMatch {
+                star_id: 2,
+                pixel_x: 633.333,
+                pixel_y: 400.0,
+                catalog_name: "Star 2".into(),
+                catalog_ra: 105.0,
+                catalog_dec: 2.0,
+                catalog_vmag: 2.5,
+                residual_pixels: 33.333,
+                dx_pixels: 33.333,
+                dy_pixels: 0.0,
+            },
+        ];
+
+        let solution = AstrometricSolution {
+            center_ra_deg: 100.0,
+            center_dec_deg: 0.0,
+            estimated_alt_deg: 45.0,
+            focal_length_est_mm: 26.0,
+            fov_deg: 60.0,
+            solved: true,
+            matches,
+            rmse_pixels: 33.333,
+            sip_distortion: None,
+        };
+
+        let report = validate_exif(&exif, &solution);
+        assert!(
+            (report.heading_error_deg - 2.0).abs() < 0.1,
+            "Expected heading error ~2.0°, got {}",
+            report.heading_error_deg
+        );
+        assert!(
+            (report.time_drift_seconds - 480.0).abs() < 10.0,
+            "Expected time drift ~480s, got {}",
+            report.time_drift_seconds
+        );
     }
 }

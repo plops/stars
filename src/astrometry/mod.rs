@@ -18,6 +18,10 @@ pub struct StarMatch {
     pub catalog_dec: f64,
     pub catalog_vmag: f64,
     pub residual_pixels: f64,
+    #[serde(default)]
+    pub dx_pixels: f64,
+    #[serde(default)]
+    pub dy_pixels: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -347,6 +351,8 @@ pub fn solve_plate(
                         matched_detected_ids.insert(star_idx);
                         let det = &detected_stars[star_idx];
 
+                        let dx = det.x - proj_x;
+                        let dy = det.y - proj_y;
                         sq_err_sum += dist * dist;
                         matches.push(StarMatch {
                             star_id: det.id,
@@ -357,6 +363,8 @@ pub fn solve_plate(
                             catalog_dec: cat.dec_deg,
                             catalog_vmag: cat.vmag,
                             residual_pixels: dist,
+                            dx_pixels: dx,
+                            dy_pixels: dy,
                         });
                     }
                 }
