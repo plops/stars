@@ -93,6 +93,7 @@ mod tests {
             solved: true,
             matches: vec![],
             rmse_pixels: 0.5,
+            sip_distortion: None,
         };
 
         let report = validate_exif(&exif, &solution);

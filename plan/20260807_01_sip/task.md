@@ -17,16 +17,17 @@ Serial task list for implementation. Each task should be completed, tested, and 
 
 
 ## Task 2: Remove Hardcoded 45° Altitude Assumption
-- [ ] In `solve_plate()`, replace `let center_alt = 45.0` with iterative refinement
-- [ ] Implement `estimate_center_altitude()`:
+- [x] In `solve_plate()`, replace `let center_alt = 45.0` with iterative refinement
+- [x] Implement `estimate_center_altitude()`:
   1. Start with initial guess from EXIF heading (if available)
   2. Try alt values [20°, 35°, 45°, 55°, 70°, 85°]
   3. For each, project catalog → pixel, count matches, pick best
   4. Refine around best with ±5° steps
-- [ ] Pass estimated altitude through `AstrometricSolution` struct
-- [ ] **Test**: `cargo test test_altitude_refinement` — synthetic image at alt=70° should solve correctly
-- [ ] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
-- [ ] **Commit**: `fix(astrometry): replace hardcoded 45° altitude with iterative refinement`
+- [x] Pass estimated altitude through `AstrometricSolution` struct
+- [x] **Test**: `cargo test test_altitude_refinement` — synthetic image at alt=70° should solve correctly
+- [x] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
+- [x] **Commit**: `fix(astrometry): replace hardcoded 45° altitude with iterative refinement`
+
 
 ## Task 3: Implement SIP Polynomial Distortion Model
 - [ ] Create `src/astrometry/sip.rs` with:

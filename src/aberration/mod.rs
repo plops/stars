@@ -210,6 +210,7 @@ mod tests {
             solved: false,
             matches: vec![],
             rmse_pixels: 0.0,
+            sip_distortion: None,
         };
 
         let report = analyze_aberration(&stars, &sol, 1200, 900, 45.0, None);

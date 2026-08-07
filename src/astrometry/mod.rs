@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 pub mod catalog;
 pub use catalog::{load_catalog, CatalogStar};
 
+pub mod sip;
+pub use sip::SipDistortion;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StarMatch {
     pub star_id: usize,
@@ -27,6 +30,8 @@ pub struct AstrometricSolution {
     pub solved: bool,
     pub matches: Vec<StarMatch>,
     pub rmse_pixels: f64,
+    #[serde(default)]
+    pub sip_distortion: Option<SipDistortion>,
 }
 
 /// 4D Geometric Quad Hash for Lost-in-Space Plate Solving
@@ -416,6 +421,39 @@ pub fn solve_plate(
     let fov_deg = 2.0 * ((18.0 / focal_len_35mm).atan()).to_degrees();
     let is_solved = matches.len() >= 3 || quad_matches >= 2;
 
+    let sip_distortion = if matches.len() >= 4 {
+        let cx = width as f64 / 2.0;
+        let cy = height as f64 / 2.0;
+        let mut pairs = Vec::new();
+        for m in &matches {
+            if let Some(cat) = catalog.iter().find(|c| c.name == m.catalog_name) {
+                let (alt, az) = radec_to_altaz(cat.ra_deg, cat.dec_deg, lat_deg, lst);
+                if let Some((px_cat, py_cat)) = altaz_to_pixel(
+                    alt,
+                    az,
+                    center_alt,
+                    center_az,
+                    focal_len_35mm,
+                    width,
+                    height,
+                ) {
+                    let u_cat = px_cat - cx;
+                    let v_cat = py_cat - cy;
+                    let u_det = m.pixel_x - cx;
+                    let v_det = m.pixel_y - cy;
+                    pairs.push(((u_cat, v_cat), (u_det, v_det)));
+                }
+            }
+        }
+        if pairs.len() >= 4 {
+            Some(SipDistortion::fit_from_point_pairs(&pairs, 3))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     AstrometricSolution {
         center_ra_deg: if !matches.is_empty() {
             // Compute weighted mean RA from matched catalog stars
@@ -437,6 +475,7 @@ pub fn solve_plate(
         solved: is_solved,
         matches,
         rmse_pixels: rmse,
+        sip_distortion,
     }
 }
 
