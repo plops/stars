@@ -47,6 +47,19 @@ def fit_sip_distortion_lmfit(u_cat, v_cat, du_data, dv_data, order=3):
     """
     Fits 2D SIP polynomial distortion parameters (A_pq, B_pq) using lmfit and prints fit errors for individual parameters.
     """
+    n_obs = len(u_cat) * 2
+    max_order = order
+    while max_order >= 2:
+        num_params = sum(2 for p in range(max_order + 1) for q in range(max_order + 1) if 2 <= p + q <= max_order)
+        if n_obs >= num_params:
+            break
+        max_order -= 1
+
+    if max_order < 2:
+        print(f"\nInsufficient matched data points ({n_obs} observations) for SIP polynomial fitting (requires >= 6).")
+        return None, {}
+
+    order = max_order
     terms = []
     params = lmfit.Parameters()
     for p in range(order + 1):
