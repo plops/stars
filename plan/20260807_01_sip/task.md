@@ -84,13 +84,14 @@ Serial task list for implementation. Each task should be completed, tested, and 
 
 
 ## Task 8: Web UI Distortion Visualization
-- [ ] Add distortion map overlay rendering to `web/mod.rs`
-- [ ] Display SIP coefficients in Aberration tab
-- [ ] Show atmospheric refraction correction curve
-- [ ] Add interactive distortion grid visualization
-- [ ] **Test**: `cargo test test_full_pipeline` — web pipeline test passes
-- [ ] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
-- [ ] **Commit**: `feat(web): add SIP distortion map and atmospheric refraction visualization`
+- [x] Add distortion map overlay rendering to `web/mod.rs`
+- [x] Display SIP coefficients in Aberration tab
+- [x] Show atmospheric refraction correction curve
+- [x] Add interactive distortion grid visualization
+- [x] **Test**: `cargo test test_full_pipeline` — web pipeline test passes
+- [x] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
+- [x] **Commit**: `feat(web): add SIP distortion map and atmospheric refraction visualization`
+
 
 ## Task 9: Documentation & Deps Update
 - [ ] Update `deps.md` with any new dependencies (csv crate)

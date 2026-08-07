@@ -20,3 +20,5 @@
 | `tracing` | `0.1` | [tokio-rs/tracing](https://github.com/tokio-rs/tracing) | Application diagnostics and structured logging |
 | `tracing-subscriber` | `0.3` | [tokio-rs/tracing](https://github.com/tokio-rs/tracing) | Log formatting and stdout subscriber filtering |
 | `base64` | `0.23` | [marshallpierce/rust-base64](https://github.com/marshallpierce/rust-base64) | Base64 encoding for image canvas data URLs |
+| `csv` | `1.4` | [burntsushi/rust-csv](https://github.com/burntsushi/rust-csv) | Fast CSV parsing for Hipparcos bright star catalog loading |
+

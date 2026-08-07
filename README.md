@@ -19,19 +19,21 @@ A high-performance, end-to-end Rust platform for **smartphone and iPhone astroph
     *   Point Spread Function (PSF) peak sharpness ratio validation ($\frac{I_{\text{peak}} - \text{bg}}{\bar{I}_{\text{surround}} - \text{bg}} \ge 1.08$).
     *   Sobel vertical gradient horizon edge detector to automatically mask terrestrial foliage, buildings, and vehicles.
 
-*   **Astrometric Plate Solver**
-    *   Embedded bright star catalog ($\le 6.5\text{ mag}$) mapped to equatorial RA/Dec coordinates.
+*   **Astrometric Plate Solver & SIP Distortion Modeling**
+    *   Externalized Hipparcos bright star catalog ($\le 6.5\text{ mag}$, 8,785 stars loaded from CSV/embedded fallback).
+    *   Iterative camera altitude estimator replacing hardcoded elevation assumptions.
+    *   SIP (Simple Imaging Polynomial) 2D distortion model fitting ($A_{p,q}, B_{p,q}$ coefficients up to order 4).
     *   Gnomonic celestial projection with fast `kiddo` KD-Tree spatial indexing.
     *   Sub-pixel matching accuracy ($0.73 - 1.16\text{ px}$ RMS residual error).
 
-*   **EXIF Metadata Validation & Drift Detection**
+*   **EXIF Metadata Validation & Directional Residual Drift Detection**
     *   Extracts iPhone EXIF tags: GPS coordinates (DMS decimal conversion), UTC timestamp, compass direction (`GPSImgDirection`), focal length ($35\text{mm}$ equivalent), exposure time, ISO, F-number.
-    *   Cross-references EXIF prior against the solved celestial sphere to calculate internal clock drift ($\Delta t$ seconds) and compass heading error ($\Delta \theta^\circ$).
+    *   Signed directional residual analysis ($\Delta x, \Delta y$) for systematic heading adjustment ($\Delta \theta^\circ$) and Earth rotation time drift ($\Delta t$ seconds).
 
-*   **Camera Optical Aberration Engine**
-    *   Brown-Conrady radial lens distortion polynomial ($k_1, k_2$).
+*   **Camera Optical Aberration & Refraction Engine**
+    *   Brown-Conrady radial lens distortion polynomial ($k_1, k_2$) and SIP polynomial model.
     *   PSF elongation analysis (coma and astigmatism parameters).
-    *   Chromatic aberration offset (px) and Bennett's atmospheric refraction modeling (arcmin).
+    *   Chromatic aberration offset (px) and Bennett's atmospheric refraction modeling integrated into projection.
     *   Composite **Optical Quality Score Index** ($0 - 100$).
 
 *   **RANSAC Satellite Streak Tracker & SGP4**
