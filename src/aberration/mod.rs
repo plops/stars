@@ -100,11 +100,7 @@ pub fn analyze_aberration(
     };
 
     // 3. Bennett's Atmospheric Refraction Formula (arcminutes)
-    let alt_clamped = altitude_deg.max(1.0);
-    let refraction_arcmin = 1.0
-        / ((alt_clamped + 7.31 / (alt_clamped + 4.4))
-            .to_radians()
-            .tan());
+    let refraction_arcmin = atmospheric_refraction_correction(altitude_deg) * 60.0;
 
     // Optical Quality Score (0 to 100)
     let quality = (100.0
@@ -194,6 +190,17 @@ fn measure_rgb_chromatic_aberration(
     }
 }
 
+/// Bennett's Atmospheric Refraction Formula returning correction in DEGREES
+pub fn atmospheric_refraction_correction(alt_deg: f64) -> f64 {
+    if alt_deg < 0.0 {
+        return 0.0;
+    }
+    let alt_clamped = alt_deg.max(0.0);
+    let term_deg = alt_clamped + 7.31 / (alt_clamped + 4.4);
+    let r_arcmin = 1.0 / term_deg.to_radians().tan();
+    (r_arcmin / 60.0).max(0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,5 +226,23 @@ mod tests {
                 && report.atmospheric_refraction_arcmin < 1.2
         );
         assert!(report.quality_score > 0.0);
+    }
+
+    #[test]
+    fn test_refraction_at_horizon() {
+        let refr_arcmin = atmospheric_refraction_correction(0.0) * 60.0;
+        assert!(
+            (refr_arcmin - 34.0).abs() < 5.0,
+            "Atmospheric refraction at horizon should be ~34 arcmin, got {refr_arcmin}"
+        );
+    }
+
+    #[test]
+    fn test_refraction_at_zenith() {
+        let refr_arcmin = atmospheric_refraction_correction(90.0) * 60.0;
+        assert!(
+            refr_arcmin.abs() < 0.1,
+            "Atmospheric refraction at zenith should be ~0 arcmin, got {refr_arcmin}"
+        );
     }
 }

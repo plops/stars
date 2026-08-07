@@ -30,17 +30,18 @@ Serial task list for implementation. Each task should be completed, tested, and 
 
 
 ## Task 3: Implement SIP Polynomial Distortion Model
-- [ ] Create `src/astrometry/sip.rs` with:
+- [x] Create `src/astrometry/sip.rs` with:
   - `SipDistortion` struct holding A_p,q and B_p,q coefficients (up to order 4)
   - `apply_forward(u, v) -> (u', v')` — pixel → corrected pixel
   - `apply_inverse(u', v') -> (u, v)` — corrected → original pixel
   - `fit_from_residuals(matches: &[StarMatch], cx, cy) -> SipDistortion` — least squares fit
-- [ ] Integrate into `solve_plate()`: after initial matching, fit SIP, re-project, re-match
-- [ ] Add SIP coefficients to `AstrometricSolution` struct
-- [ ] **Test**: `cargo test test_sip_forward_inverse` — round-trip error < 0.01 px
-- [ ] **Test**: `cargo test test_sip_fit` — synthetic distorted image recovers k1, k2 within 10%
-- [ ] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
-- [ ] **Commit**: `feat(astrometry): add SIP polynomial distortion model with forward/inverse transforms`
+- [x] Integrate into `solve_plate()`: after initial matching, fit SIP, re-project, re-match
+- [x] Add SIP coefficients to `AstrometricSolution` struct
+- [x] **Test**: `cargo test test_sip_forward_inverse` — round-trip error < 0.01 px
+- [x] **Test**: `cargo test test_sip_fit` — synthetic distorted image recovers k1, k2 within 10%
+- [x] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
+- [x] **Commit**: `feat(astrometry): add SIP polynomial distortion model with forward/inverse transforms`
+
 
 ## Task 4: Atmospheric Refraction Integration
 - [ ] Create `pub fn atmospheric_refraction_correction(alt_deg: f64) -> f64` in `aberration/mod.rs`

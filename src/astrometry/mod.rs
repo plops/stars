@@ -166,8 +166,37 @@ pub fn altaz_to_pixel(
     width: u32,
     height: u32,
 ) -> Option<(f64, f64)> {
+    altaz_to_pixel_with_refraction(
+        alt_deg,
+        az_deg,
+        center_alt,
+        center_az,
+        focal_len_35mm,
+        width,
+        height,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn altaz_to_pixel_with_refraction(
+    alt_deg: f64,
+    az_deg: f64,
+    center_alt: f64,
+    center_az: f64,
+    focal_len_35mm: f64,
+    width: u32,
+    height: u32,
+    enable_refraction: bool,
+) -> Option<(f64, f64)> {
+    let effective_alt = if enable_refraction {
+        alt_deg + crate::aberration::atmospheric_refraction_correction(alt_deg)
+    } else {
+        alt_deg
+    };
+
     let d_az_rad = (az_deg - center_az).to_radians();
-    let alt_rad = alt_deg.to_radians();
+    let alt_rad = effective_alt.to_radians();
     let c_alt_rad = center_alt.to_radians();
 
     let cos_c = c_alt_rad.sin() * alt_rad.sin() + c_alt_rad.cos() * alt_rad.cos() * d_az_rad.cos();
