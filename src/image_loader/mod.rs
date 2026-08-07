@@ -252,13 +252,98 @@ pub fn generate_synthetic_image(opts: &SyntheticOptions) -> LoadedImage {
     }
 }
 
-pub fn load_image_from_bytes(name: &str, bytes: &[u8]) -> Result<LoadedImage> {
-    let dyn_img = image::load_from_memory(bytes)
-        .with_context(|| format!("Failed to decode image from memory for {}", name))?;
+fn decode_heic_via_python(bytes: &[u8]) -> Result<Vec<u8>> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
 
-    let (width, height) = dyn_img.dimensions();
-    let rgb = dyn_img.to_rgb8();
-    let gray = dyn_img.to_luma8();
+    let script = r#"
+import sys, io, pillow_heif
+from PIL import Image
+pillow_heif.register_heif_opener()
+data = sys.stdin.buffer.read()
+img = Image.open(io.BytesIO(data)).convert('RGB')
+out = io.BytesIO()
+img.save(out, format='PNG')
+sys.stdout.buffer.write(out.getvalue())
+"#;
+
+    let venv_python = Path::new("/workspace/src/stars/python_prototype/.venv/bin/python");
+    let mut child = if venv_python.exists() {
+        Command::new(venv_python)
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("Failed to spawn python process")?
+    } else {
+        Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("Failed to spawn python3 process")?
+    };
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(bytes)?;
+    }
+
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        let err_msg = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Python HEIC decoder process failed: {}", err_msg);
+    }
+
+    Ok(output.stdout)
+}
+
+pub fn load_heic_from_bytes(name: &str, bytes: &[u8]) -> Result<LoadedImage> {
+    // 1. Try native libheif-rs decode
+    let native_decode_result: Result<(RgbImage, u32, u32)> = (|| {
+        let ctx = libheif_rs::HeifContext::read_from_bytes(bytes)?;
+        let handle = ctx.primary_image_handle()?;
+        let lib_heif = libheif_rs::LibHeif::new();
+        let image = lib_heif.decode(&handle, libheif_rs::ColorSpace::Rgb(libheif_rs::RgbChroma::Rgb), None)?;
+
+        let width = image.width();
+        let height = image.height();
+        let planes = image.planes();
+        let interleaved = planes.interleaved
+            .context("No interleaved RGB plane found in HEIF image")?;
+
+        let data = interleaved.data;
+        let stride = interleaved.stride;
+
+        let mut rgb = RgbImage::new(width, height);
+        for y in 0..height {
+            let row_offset = (y as usize) * stride;
+            for x in 0..width {
+                let px_offset = row_offset + (x as usize) * 3;
+                if px_offset + 2 < data.len() {
+                    rgb.put_pixel(x, y, Rgb([data[px_offset], data[px_offset + 1], data[px_offset + 2]]));
+                }
+            }
+        }
+        Ok((rgb, width, height))
+    })();
+
+    let (rgb, width, height) = match native_decode_result {
+        Ok(res) => res,
+        Err(_) => {
+            // 2. Fallback to python pillow-heif if native HEVC plugin missing
+            let png_bytes = decode_heic_via_python(bytes)
+                .with_context(|| format!("Failed to decode HEIF image via Python pillow_heif for {}", name))?;
+            let dyn_img = image::load_from_memory(&png_bytes)?;
+            let (w, h) = dyn_img.dimensions();
+            (dyn_img.to_rgb8(), w, h)
+        }
+    };
+
+    let gray = image::DynamicImage::ImageRgb8(rgb.clone()).to_luma8();
 
     let mut exif = parse_exif_bytes(bytes).unwrap_or_default();
     exif.image_width = Some(width);
@@ -272,6 +357,37 @@ pub fn load_image_from_bytes(name: &str, bytes: &[u8]) -> Result<LoadedImage> {
         rgb,
         exif,
     })
+}
+
+pub fn load_image_from_bytes(name: &str, bytes: &[u8]) -> Result<LoadedImage> {
+    match image::load_from_memory(bytes) {
+        Ok(dyn_img) => {
+            let (width, height) = dyn_img.dimensions();
+            let rgb = dyn_img.to_rgb8();
+            let gray = dyn_img.to_luma8();
+
+            let mut exif = parse_exif_bytes(bytes).unwrap_or_default();
+            exif.image_width = Some(width);
+            exif.image_height = Some(height);
+
+            Ok(LoadedImage {
+                name: name.to_string(),
+                width,
+                height,
+                gray,
+                rgb,
+                exif,
+            })
+        }
+        Err(orig_err) => {
+            match load_heic_from_bytes(name, bytes) {
+                Ok(loaded) => Ok(loaded),
+                Err(heic_err) => {
+                    Err(heic_err).with_context(|| format!("Failed to decode image (JPEG error: {}, HEIC error failed)", orig_err))
+                }
+            }
+        }
+    }
 }
 
 pub fn load_image_from_path(path: &Path) -> Result<LoadedImage> {

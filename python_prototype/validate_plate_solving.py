@@ -1,7 +1,10 @@
 import os
+import csv
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
+import pillow_heif
+pillow_heif.register_heif_opener()
 import exifread
 from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord, EarthLocation, AltAz
@@ -9,7 +12,6 @@ from astropy.time import Time
 import astropy.units as u
 from photutils.detection import DAOStarFinder
 from astropy.stats import sigma_clipped_stats
-from astroquery.gaia import Gaia
 import twirl
 
 def ensure_dir(d):
@@ -35,7 +37,6 @@ def convert_to_degrees(value):
 def extract_location_time(tags):
     try:
         if 'GPS GPSLatitude' not in tags:
-            # Default test parameters matching iPhone dummy metadata
             return 48.137154, 11.576124, "2026-08-05 22:30:00", 180.0
             
         lat = convert_to_degrees(tags['GPS GPSLatitude'])
@@ -57,8 +58,21 @@ def extract_location_time(tags):
         print(f"EXIF extract fallback: {e}")
         return 48.137154, 11.576124, "2026-08-05 22:30:00", 180.0
 
+def load_local_catalog(csv_path='/workspace/src/stars/data/bright_stars.csv'):
+    radecs = []
+    names = []
+    vmags = []
+    if os.path.exists(csv_path):
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                radecs.append([float(row['ra_deg']), float(row['dec_deg'])])
+                names.append(row['name'])
+                vmags.append(float(row['vmag']))
+    return np.array(radecs), names, vmags
+
 print("=== 1. Image Loading & Star Detection (Ground Truth) ===")
-images = ['/workspace/src/stars.jpg', '/workspace/src/IMG_8550.jpg']
+images = ['/workspace/src/stars.jpg', '/workspace/src/IMG_8550.jpg', '/workspace/src/IMG_8556.jpg', '/workspace/src/IMG_8556.HEIC']
 results = {}
 
 for img_path in images:
@@ -95,13 +109,20 @@ for img_path in images:
     
     results[img_path] = {
         'sources': sources,
+        'data': data,
         'lat': lat, 'lon': lon, 'dt': dt, 'heading': heading,
         'shape': data.shape
     }
 
-print("\n=== 2. Ground Truth Astrometric Fitting ===")
+print("\n=== 2. Catalog Loading & Twirl Plate Solving ===")
+cat_radecs, cat_names, cat_vmags = load_local_catalog()
+print(f"Loaded {len(cat_radecs)} stars from local Hipparcos/bright star catalog.")
+
+twirl_results = {}
+
 for img_path, res in results.items():
-    print(f"\nEvaluating ground truth for {os.path.basename(img_path)}")
+    img_name = os.path.basename(img_path)
+    print(f"\n--- Running Twirl Plate Solving for {img_name} ---")
     if res['sources'] is None or len(res['sources']) < 4:
         print("Insufficient stars detected.")
         continue
@@ -110,11 +131,171 @@ for img_path, res in results.items():
     y_col = 'y_centroid' if 'y_centroid' in res['sources'].colnames else 'ycentroid'
     stars_xy = np.array([res['sources'][x_col], res['sources'][y_col]]).T
     
-    # Sort stars by peak brightness
     if 'peak' in res['sources'].colnames:
         idx = np.argsort(res['sources']['peak'])[::-1]
         stars_xy = stars_xy[idx]
         
     print(f"Top 10 detected star coordinates (px):\n{stars_xy[:10]}")
+    
+    wcs = twirl.compute_wcs(stars_xy[:30], cat_radecs, tolerance=25)
+    
+    if wcs is None:
+        print(f"Twirl WCS solving failed for {img_name} with local catalog. Trying Gaia query fallback...")
+        # Fallback to Gaia cone query if available
+        hints = {
+            'stars.jpg': SkyCoord(335.0, 42.0, unit='deg'),
+            'IMG_8550.jpg': SkyCoord(307.0, 43.0, unit='deg')
+        }
+        hint_coord = hints.get(img_name, SkyCoord(320.0, 40.0, unit='deg'))
+        try:
+            gaia_radecs = twirl.gaia_radecs(hint_coord, 45.0, limit=300)
+            wcs = twirl.compute_wcs(stars_xy[:30], gaia_radecs, tolerance=25)
+            radecs_used = gaia_radecs
+        except Exception as e:
+            print(f"Gaia query failed: {e}")
+            radecs_used = cat_radecs
+    else:
+        radecs_used = cat_radecs
+        
+    if wcs is None:
+        print(f"FAILED to solve WCS for {img_name}")
+        continue
+        
+    crval_ra, crval_dec = wcs.wcs.crval
+    print(f"SUCCESS: Twirl WCS Solved!")
+    print(f"  Center RA:  {crval_ra:.4f}°")
+    print(f"  Center Dec: {crval_dec:.4f}°")
+    
+    # Calculate pixel scale and FOV
+    if hasattr(wcs.wcs, 'cd') and wcs.wcs.cd is not None:
+        cd = wcs.wcs.cd
+        scale_deg = np.sqrt(np.abs(np.linalg.det(cd)))
+    elif hasattr(wcs.wcs, 'cdelt') and wcs.wcs.cdelt[0] != 0:
+        scale_deg = np.abs(wcs.wcs.cdelt[0])
+    else:
+        scale_deg = 0.02 # fallback ~72 arcsec/px
+        
+    scale_arcsec = scale_deg * 3600.0
+    height, width = res['shape']
+    fov_x_deg = width * scale_deg
+    fov_y_deg = height * scale_deg
+    print(f"  Pixel Scale: {scale_arcsec:.2f} arcsec/pixel ({scale_deg:.5f} deg/px)")
+    print(f"  Calculated FOV: {fov_x_deg:.2f}° x {fov_y_deg:.2f}°")
+    
+    # Project catalog stars into image pixels
+    cat_pixels = np.array(wcs.world_to_pixel_values(radecs_used))
+    
+    # Match detected stars to catalog positions
+    match_threshold_px = 25.0
+    matched_pairs = []
+    dx_list = []
+    dy_list = []
+    dist_list = []
+    cat_matched_xy = []
+    det_matched_xy = []
+    
+    for s_xy in stars_xy:
+        dists = np.linalg.norm(cat_pixels - s_xy, axis=1)
+        min_idx = np.argmin(dists)
+        min_dist = dists[min_idx]
+        if min_dist <= match_threshold_px:
+            cat_xy = cat_pixels[min_idx]
+            dx = s_xy[0] - cat_xy[0]
+            dy = s_xy[1] - cat_xy[1]
+            dx_list.append(dx)
+            dy_list.append(dy)
+            dist_list.append(min_dist)
+            det_matched_xy.append(s_xy)
+            cat_matched_xy.append(cat_xy)
+            matched_pairs.append((s_xy, cat_xy, min_dist))
+            
+    matched_count = len(matched_pairs)
+    rmse_px = np.sqrt(np.mean(np.array(dist_list)**2)) if matched_count > 0 else 0.0
+    mean_dx = np.mean(dx_list) if dx_list else 0.0
+    mean_dy = np.mean(dy_list) if dy_list else 0.0
+    
+    print(f"  Matched Stars: {matched_count}")
+    print(f"  Residual RMSE: {rmse_px:.2f} px")
+    print(f"  Mean dx: {mean_dx:+.2f} px, Mean dy: {mean_dy:+.2f} px")
+    
+    # === Diagnostic Plotting ===
+    # 1. Overlay Plot: Image + Detected Stars + Twirl Catalog Stars
+    plt.figure(figsize=(12, 9))
+    plt.imshow(res['data'], cmap='gray', origin='lower',
+               vmin=np.median(res['data'])-np.std(res['data']),
+               vmax=np.median(res['data'])+5*np.std(res['data']))
+    
+    plt.scatter(stars_xy[:, 0], stars_xy[:, 1], facecolors='none', edgecolors='cyan',
+                s=40, label=f'Detected Stars ({len(stars_xy)})')
+    
+    if len(cat_matched_xy) > 0:
+        cat_matched_xy = np.array(cat_matched_xy)
+        plt.scatter(cat_matched_xy[:, 0], cat_matched_xy[:, 1], color='red', marker='+',
+                    s=60, label=f'Twirl Solved Stars ({matched_count})')
+        
+    plt.title(f'Twirl WCS Fit Overlay: {img_name}\nCenter: RA={crval_ra:.2f}°, Dec={crval_dec:.2f}° | RMSE={rmse_px:.2f}px')
+    plt.legend(loc='upper right')
+    plot_fit_path = f'plots/twirl_fit_{img_name}.png'
+    plt.savefig(plot_fit_path, bbox_inches='tight')
+    plt.close()
+    
+    # 2. Residuals Plot: 2D Scatter + Radial Drift
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    
+    if matched_count > 0:
+        ax1.scatter(dx_list, dy_list, color='blue', alpha=0.7, edgecolors='k')
+        ax1.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+        ax1.axvline(0, color='gray', linestyle='--', linewidth=0.8)
+        ax1.set_xlabel('dx Residual (px)')
+        ax1.set_ylabel('dy Residual (px)')
+        ax1.set_title(f'2D Residual Distribution\n(Mean dx={mean_dx:+.2f}px, dy={mean_dy:+.2f}px)')
+        ax1.grid(True, linestyle=':', alpha=0.6)
+        
+        center_x, center_y = width / 2.0, height / 2.0
+        r_dist = [np.hypot(p[0][0] - center_x, p[0][1] - center_y) for p in matched_pairs]
+        
+        ax2.scatter(r_dist, dist_list, color='crimson', alpha=0.7, edgecolors='k')
+        ax2.set_xlabel('Distance from Image Center (px)')
+        ax2.set_ylabel('Residual Magnitude (px)')
+        ax2.set_title(f'Radial Distortion Profile\n(Overall RMSE = {rmse_px:.2f}px)')
+        ax2.grid(True, linestyle=':', alpha=0.6)
+    else:
+        ax1.text(0.5, 0.5, 'No Star Matches', ha='center', va='center')
+        ax2.text(0.5, 0.5, 'No Star Matches', ha='center', va='center')
+        
+    plt.suptitle(f'Twirl Astrometric Fit Residuals: {img_name}')
+    plot_res_path = f'plots/twirl_residuals_{img_name}.png'
+    plt.savefig(plot_res_path, bbox_inches='tight')
+    plt.close()
+    
+    twirl_results[img_path] = {
+        'solved': True,
+        'crval_ra': crval_ra,
+        'crval_dec': crval_dec,
+        'scale_arcsec': scale_arcsec,
+        'fov_x_deg': fov_x_deg,
+        'fov_y_deg': fov_y_deg,
+        'matched_count': matched_count,
+        'rmse_px': rmse_px,
+        'mean_dx': mean_dx,
+        'mean_dy': mean_dy,
+        'fit_plot': plot_fit_path,
+        'res_plot': plot_res_path
+    }
 
-print("\nGround truth evaluation complete. Plots saved to plots/.")
+print("\n========================================================")
+print("✦ TWIRL ASTROMETRIC PLATE SOLVING SUMMARY ✦")
+print("========================================================")
+for img_path, res in twirl_results.items():
+    name = os.path.basename(img_path)
+    print(f"\nImage:              {name}")
+    print(f"WCS Status:         {'SOLVED' if res['solved'] else 'FAILED'}")
+    print(f"Center Sky Pos:     RA = {res['crval_ra']:.4f}°, Dec = {res['crval_dec']:.4f}°")
+    print(f"Pixel Scale:        {res['scale_arcsec']:.2f} arcsec/px")
+    print(f"Field of View:      {res['fov_x_deg']:.2f}° x {res['fov_y_deg']:.2f}°")
+    print(f"Matched Catalog:    {res['matched_count']} stars")
+    print(f"Residual Error:     RMSE = {res['rmse_px']:.2f} px (dx={res['mean_dx']:+.2f}px, dy={res['mean_dy']:+.2f}px)")
+    print(f"Diagnostic Plots:   {res['fit_plot']}, {res['res_plot']}")
+
+print("\nGround truth evaluation and twirl fitting complete. Plots saved to plots/.")
+

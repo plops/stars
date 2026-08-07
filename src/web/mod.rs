@@ -8,7 +8,7 @@ use crate::validation::{validate_exif, ExifValidationReport};
 
 use anyhow::Result;
 use axum::{
-    extract::{Multipart, Query},
+    extract::{DefaultBodyLimit, Multipart, Query},
     response::{Html, IntoResponse, Json},
     routing::{get, post},
     Router,
@@ -51,6 +51,7 @@ pub async fn run_web_server(port: u16) -> Result<()> {
         .route("/api/sample", get(get_sample_analysis))
         .route("/api/catalog", get(get_catalog))
         .route("/api/upload", post(upload_and_analyze))
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
