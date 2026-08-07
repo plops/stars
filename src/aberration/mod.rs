@@ -204,6 +204,7 @@ mod tests {
         let sol = AstrometricSolution {
             center_ra_deg: 0.0,
             center_dec_deg: 0.0,
+            estimated_alt_deg: 45.0,
             focal_length_est_mm: 26.0,
             fov_deg: 65.0,
             solved: false,

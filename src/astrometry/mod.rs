@@ -21,6 +21,7 @@ pub struct StarMatch {
 pub struct AstrometricSolution {
     pub center_ra_deg: f64,
     pub center_dec_deg: f64,
+    pub estimated_alt_deg: f64,
     pub focal_length_est_mm: f64,
     pub fov_deg: f64,
     pub solved: bool,
@@ -188,6 +189,72 @@ pub fn altaz_to_pixel(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn estimate_center_altitude(
+    detected_stars: &[DetectedStar],
+    catalog: &[CatalogStar],
+    lat_deg: f64,
+    lst: f64,
+    center_az: f64,
+    focal_len_35mm: f64,
+    width: u32,
+    height: u32,
+) -> f64 {
+    if detected_stars.is_empty() {
+        return 45.0;
+    }
+
+    let mut tree_2d: KdTree<f64, 2> = KdTree::new();
+    for (i, star) in detected_stars.iter().enumerate() {
+        tree_2d.add(&[star.x, star.y], i as u64);
+    }
+
+    let count_matches_at_alt = |test_alt: f64| -> usize {
+        let mut count = 0;
+        let mut matched_ids = std::collections::HashSet::new();
+        for cat in catalog {
+            let (alt, az) = radec_to_altaz(cat.ra_deg, cat.dec_deg, lat_deg, lst);
+            if let Some((px, py)) =
+                altaz_to_pixel(alt, az, test_alt, center_az, focal_len_35mm, width, height)
+            {
+                let nearest = tree_2d.nearest_one::<kiddo::SquaredEuclidean>(&[px, py]);
+                if nearest.distance.sqrt() < 80.0 {
+                    let star_idx = nearest.item as usize;
+                    if matched_ids.insert(star_idx) {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    };
+
+    let coarse_alts = [20.0, 35.0, 45.0, 55.0, 70.0, 85.0];
+    let mut best_alt = 45.0;
+    let mut max_matches = 0;
+
+    for &alt in &coarse_alts {
+        let matches = count_matches_at_alt(alt);
+        if matches > max_matches {
+            max_matches = matches;
+            best_alt = alt;
+        }
+    }
+
+    let refine_offsets = [-5.0, -2.5, 2.5, 5.0];
+    let mut refined_best_alt = best_alt;
+    for &offset in &refine_offsets {
+        let candidate_alt = (best_alt + offset).clamp(5.0, 89.0);
+        let matches = count_matches_at_alt(candidate_alt);
+        if matches > max_matches {
+            max_matches = matches;
+            refined_best_alt = candidate_alt;
+        }
+    }
+
+    refined_best_alt
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn solve_plate(
     detected_stars: &[DetectedStar],
     lat_deg: f64,
@@ -203,8 +270,16 @@ pub fn solve_plate(
     let gmst = greenwich_mean_sidereal_time(jd);
     let lst = local_sidereal_time(gmst, lon_deg);
 
-    // Estimate camera altitude: use 45° as initial guess, then refine based on best matches
-    let center_alt = 45.0;
+    let center_alt = estimate_center_altitude(
+        detected_stars,
+        &catalog,
+        lat_deg,
+        lst,
+        heading_deg,
+        focal_len_35mm,
+        width,
+        height,
+    );
     let center_az = heading_deg;
 
     // 1. Build 2D KdTree for spatial pixel nearest neighbor matching
@@ -356,6 +431,7 @@ pub fn solve_plate(
         } else {
             lat_deg // Fallback: assume looking at meridian → Dec ≈ latitude
         },
+        estimated_alt_deg: center_alt,
         focal_length_est_mm: focal_len_35mm,
         fov_deg,
         solved: is_solved,
@@ -411,6 +487,72 @@ mod tests {
         assert!(
             err < 1e-4,
             "Quad hash must be scale and rotation invariant, error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_altitude_refinement() {
+        let catalog = get_bright_star_catalog();
+        let lat_deg = 48.137;
+        let lon_deg = 11.575;
+        let heading_deg = 180.0;
+        let timestamp_utc = 1700000000;
+        let focal_len_35mm = 26.0;
+        let width = 1000;
+        let height = 1000;
+        let target_alt = 70.0;
+
+        let jd = julian_date(timestamp_utc);
+        let gmst = greenwich_mean_sidereal_time(jd);
+        let lst = local_sidereal_time(gmst, lon_deg);
+
+        let mut detected_stars = Vec::new();
+        let mut star_id = 0;
+        for cat in &catalog {
+            let (alt, az) = radec_to_altaz(cat.ra_deg, cat.dec_deg, lat_deg, lst);
+            if let Some((px, py)) = altaz_to_pixel(
+                alt,
+                az,
+                target_alt,
+                heading_deg,
+                focal_len_35mm,
+                width,
+                height,
+            ) {
+                detected_stars.push(DetectedStar {
+                    id: star_id,
+                    x: px,
+                    y: py,
+                    intensity: 1000.0,
+                    peak_brightness: 255,
+                    snr: 20.0,
+                    fwhm: 3.0,
+                    elongation: 1.0,
+                });
+                star_id += 1;
+            }
+        }
+
+        let solution = solve_plate(
+            &detected_stars,
+            lat_deg,
+            lon_deg,
+            heading_deg,
+            timestamp_utc,
+            focal_len_35mm,
+            width,
+            height,
+        );
+
+        assert!(
+            solution.solved,
+            "Plate solve should succeed for synthetic image at alt=70°"
+        );
+        assert!(
+            (solution.estimated_alt_deg - target_alt).abs() <= 5.0,
+            "Estimated altitude {} should be close to target altitude {}",
+            solution.estimated_alt_deg,
+            target_alt
         );
     }
 }

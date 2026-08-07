@@ -5,15 +5,16 @@ Serial task list for implementation. Each task should be completed, tested, and 
 ---
 
 ## Task 1: Externalize Star Catalog
-- [ ] Create `src/astrometry/catalog.rs` with `CatalogStar` struct and `load_catalog()` function
-- [ ] Create `data/bright_stars.csv` with Hipparcos bright stars (≤ mag 6.5, ~5000 stars)
+- [x] Create `src/astrometry/catalog.rs` with `CatalogStar` struct and `load_catalog()` function
+- [x] Create `data/bright_stars.csv` with Hipparcos bright stars (≤ mag 6.5, ~5000 stars)
   - Columns: name, ra_deg, dec_deg, vmag, spectral, parallax_mas, pmra_mas, pmdec_mas
-- [ ] Add `csv` dependency to `Cargo.toml` (latest version)
-- [ ] Modify `src/astrometry/mod.rs` to use external catalog instead of hardcoded list
-- [ ] Add `include_bytes!()` or runtime CSV loading with fallback to embedded catalog
-- [ ] **Test**: `cargo test test_catalog_loading` — verify ≥ 5000 stars loaded, magnitude range correct
-- [ ] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
-- [ ] **Commit**: `feat(astrometry): externalize star catalog from hardcoded list to CSV`
+- [x] Add `csv` dependency to `Cargo.toml` (latest version)
+- [x] Modify `src/astrometry/mod.rs` to use external catalog instead of hardcoded list
+- [x] Add `include_bytes!()` or runtime CSV loading with fallback to embedded catalog
+- [x] **Test**: `cargo test test_catalog_loading` — verify ≥ 5000 stars loaded, magnitude range correct
+- [x] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
+- [x] **Commit**: `feat(astrometry): externalize star catalog from hardcoded list to CSV`
+
 
 ## Task 2: Remove Hardcoded 45° Altitude Assumption
 - [ ] In `solve_plate()`, replace `let center_alt = 45.0` with iterative refinement
