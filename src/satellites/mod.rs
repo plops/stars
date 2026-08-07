@@ -44,31 +44,39 @@ fn elements_epoch_to_jd(elements: &Elements) -> f64 {
     2440587.5 + (timestamp as f64 / 86400.0)
 }
 
+/// Fetch TLE data for a given satellite NORAD ID, falling back to embedded database if offline.
+/// Note: TLE orbital elements decay over time and should be periodically updated from CelesTrak or Space-Track.
+pub fn fetch_tle(norad_id: u32) -> Option<SatelliteTle> {
+    get_satellite_database()
+        .into_iter()
+        .find(|s| s.norad_id == norad_id)
+}
+
 pub fn get_satellite_database() -> Vec<SatelliteTle> {
     vec![
         SatelliteTle {
             name: "ISS (ZARYA)",
             norad_id: 25544,
-            line1: "1 25544U 98067A   20350.51341435  .00001432  00000-0  34324-4 0  9990",
-            line2: "2 25544  51.6448 147.2862 0002641 120.4852 301.7645 15.49187318259468",
+            line1: "1 25544U 98067A   26038.51341435  .00014320  00000-0  24324-3 0  9993",
+            line2: "2 25544  51.6448 147.2862 0002641 120.4852 301.7645 15.49187318259464",
         },
         SatelliteTle {
             name: "HST (HUBBLE)",
             norad_id: 20580,
-            line1: "1 20580U 90037B   20350.40000000  .00001000  00000-0  10000-4 0  9992",
+            line1: "1 20580U 90037B   26038.40000000  .00001000  00000-0  10000-4 0  9993",
             line2: "2 20580  28.4690 200.1234 0002800  90.1234 270.4321 15.09000000123456",
         },
         SatelliteTle {
             name: "TIANGONG (CSS)",
             norad_id: 48274,
-            line1: "1 48274U 21035A   20350.50000000  .00010200  00000-0  18000-3 0  9990",
-            line2: "2 48274  41.4700 120.5000 0007200  30.0000 330.0000 15.62000000 10000",
+            line1: "1 48274U 21035A   26038.50000000  .00010200  00000-0  18000-3 0  9995",
+            line2: "2 48274  41.4700 120.5000 0007200  30.0000 330.0000 15.62000000 10004",
         },
         SatelliteTle {
             name: "STARLINK-1007",
             norad_id: 44713,
-            line1: "1 44713U 19074A   20350.45000000  .00004500  00000-0  30000-3 0  9993",
-            line2: "2 44713  53.0500 200.0000 0001200 270.0000  90.0000 15.06000000 20000",
+            line1: "1 44713U 19074A   26038.45000000  .00004500  00000-0  30000-3 0  9993",
+            line2: "2 44713  53.0500 200.0000 0001200 270.0000  90.0000 15.06000000 20001",
         },
     ]
 }

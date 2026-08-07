@@ -56,12 +56,13 @@ Serial task list for implementation. Each task should be completed, tested, and 
 
 
 ## Task 5: Signed Residual Analysis in Validation
-- [ ] Modify `StarMatch` to include signed residuals `dx_pixels` and `dy_pixels` (not just unsigned distance)
-- [ ] Update `validate_exif()` to compute systematic heading error from mean signed X-residual
-- [ ] Compute time drift from signed RA residual (Earth rotation direction)
-- [ ] **Test**: `cargo test test_signed_residuals` — intentional 2° heading offset produces correct signed error
-- [ ] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
-- [ ] **Commit**: `fix(validation): use signed directional residuals for heading and time drift detection`
+- [x] Modify `StarMatch` to include signed residuals `dx_pixels` and `dy_pixels` (not just unsigned distance)
+- [x] Update `validate_exif()` to compute systematic heading error from mean signed X-residual
+- [x] Compute time drift from signed RA residual (Earth rotation direction)
+- [x] **Test**: `cargo test test_signed_residuals` — intentional 2° heading offset produces correct signed error
+- [x] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
+- [x] **Commit**: `fix(validation): use signed directional residuals for heading and time drift detection`
+
 
 ## Task 6: Update Satellite TLE Data
 - [ ] Replace hardcoded 2020-epoch TLEs with 2026-epoch data
