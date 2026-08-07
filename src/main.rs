@@ -118,15 +118,13 @@ async fn main() -> Result<()> {
         );
         println!("EXIF Validation:      {}", result.validation.summary);
         println!(
-            "Radial Distortion k1: {:.6e} ± {:.6e} (fit error: {:.6e})",
+            "Radial Distortion k1: {:+.2e} ± {:.2e}",
             result.aberration.radial_k1,
-            result.aberration.radial_k1_err,
             result.aberration.radial_k1_err
         );
         println!(
-            "Radial Distortion k2: {:.6e} ± {:.6e} (fit error: {:.6e})",
+            "Radial Distortion k2: {:+.2e} ± {:.2e}",
             result.aberration.radial_k2,
-            result.aberration.radial_k2_err,
             result.aberration.radial_k2_err
         );
         println!(

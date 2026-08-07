@@ -39,9 +39,49 @@ def fit_radial_distortion_lmfit(norm_r, dr_pixels, max_radius):
     for name, param in res.params.items():
         stderr_val = param.stderr if param.stderr is not None else 0.0
         param_errors[name] = (param.value, stderr_val)
-        print(f"  {name}: {param.value:+13.6e} ± {stderr_val:.6e} (fit error: {stderr_val:.6e})")
+        print(f"  {name}: {param.value:+.2e} ± {stderr_val:.2e}")
+
+    # Bootstrap Resampling Analysis (B=200)
+    boot_res = bootstrap_radial_fit_lmfit(norm_r, dr_pixels, max_radius, n_boot=200)
+    if boot_res:
+        print("\nEmpirical Bootstrap Resampling Uncertainty (B=200):")
+        print(f"  k1: boot_std={boot_res['k1_std']:.2e}, 95% CI=[{boot_res['k1_ci95'][0]:+.2e}, {boot_res['k1_ci95'][1]:+.2e}]")
+        print(f"  k2: boot_std={boot_res['k2_std']:.2e}, 95% CI=[{boot_res['k2_ci95'][0]:+.2e}, {boot_res['k2_ci95'][1]:+.2e}]")
 
     return res, param_errors
+
+def bootstrap_radial_fit_lmfit(norm_r, dr_pixels, max_radius, n_boot=200):
+    n_pts = len(norm_r)
+    if n_pts < 3:
+        return {}
+    boot_k1 = []
+    boot_k2 = []
+
+    for _ in range(n_boot):
+        idx = np.random.choice(n_pts, size=n_pts, replace=True)
+        r_samp = norm_r[idx]
+        dr_samp = dr_pixels[idx]
+
+        def rad_res(p):
+            k1 = p['k1'].value
+            k2 = p['k2'].value
+            return (k1 * (r_samp**3) + k2 * (r_samp**5)) * max_radius - dr_samp
+
+        p = lmfit.Parameters()
+        p.add('k1', value=0.0)
+        p.add('k2', value=0.0)
+        out = lmfit.minimize(rad_res, p)
+        boot_k1.append(out.params['k1'].value)
+        boot_k2.append(out.params['k2'].value)
+
+    boot_k1 = np.array(boot_k1)
+    boot_k2 = np.array(boot_k2)
+    return {
+        'k1_std': np.std(boot_k1),
+        'k1_ci95': np.percentile(boot_k1, [2.5, 97.5]),
+        'k2_std': np.std(boot_k2),
+        'k2_ci95': np.percentile(boot_k2, [2.5, 97.5])
+    }
 
 def fit_sip_distortion_lmfit(u_cat, v_cat, du_data, dv_data, order=3):
     """
@@ -91,7 +131,7 @@ def fit_sip_distortion_lmfit(u_cat, v_cat, du_data, dv_data, order=3):
     for name, param in res.params.items():
         stderr_val = param.stderr if param.stderr is not None else 0.0
         param_errors[name] = (param.value, stderr_val)
-        print(f"  {name}: {param.value:+13.6e} ± {stderr_val:.6e} (fit error: {stderr_val:.6e})")
+        print(f"  {name}: {param.value:+.2e} ± {stderr_val:.2e}")
 
     return res, param_errors
 

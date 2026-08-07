@@ -13,6 +13,10 @@ pub struct SipDistortion {
     #[serde(default)]
     pub b_err: [[f64; 5]; 5],
     #[serde(default)]
+    pub a_boot_err: [[f64; 5]; 5],
+    #[serde(default)]
+    pub b_boot_err: [[f64; 5]; 5],
+    #[serde(default)]
     pub fit_rmse_pixels: f64,
 }
 
@@ -24,6 +28,8 @@ impl Default for SipDistortion {
             b: [[0.0; 5]; 5],
             a_err: [[0.0; 5]; 5],
             b_err: [[0.0; 5]; 5],
+            a_boot_err: [[0.0; 5]; 5],
+            b_boot_err: [[0.0; 5]; 5],
             fit_rmse_pixels: 0.0,
         }
     }
@@ -37,6 +43,8 @@ impl SipDistortion {
             b: [[0.0; 5]; 5],
             a_err: [[0.0; 5]; 5],
             b_err: [[0.0; 5]; 5],
+            a_boot_err: [[0.0; 5]; 5],
+            b_boot_err: [[0.0; 5]; 5],
             fit_rmse_pixels: 0.0,
         }
     }
@@ -260,23 +268,113 @@ impl SipDistortion {
         sip
     }
 
-    /// Print individual parameter values and their fit errors
+    /// Fit SIP and compute empirical bootstrap standard errors (num_boot iterations)
+    pub fn fit_with_bootstrap(
+        pairs: &[((f64, f64), (f64, f64))],
+        order: usize,
+        num_boot: usize,
+    ) -> Self {
+        let mut sip = Self::fit_from_point_pairs(pairs, order);
+        let (a_boot, b_boot) = Self::compute_bootstrap_errors(pairs, order, num_boot);
+        sip.a_boot_err = a_boot;
+        sip.b_boot_err = b_boot;
+        sip
+    }
+
+    /// Compute empirical bootstrap standard errors (B resamples with replacement)
+    pub fn compute_bootstrap_errors(
+        pairs: &[((f64, f64), (f64, f64))],
+        order: usize,
+        num_boot: usize,
+    ) -> ([[f64; 5]; 5], [[f64; 5]; 5]) {
+        let n = pairs.len();
+        if n < 4 || num_boot == 0 {
+            return ([[0.0; 5]; 5], [[0.0; 5]; 5]);
+        }
+
+        let mut rng = rand::thread_rng();
+        let mut a_samples: Vec<Vec<f64>> = vec![Vec::with_capacity(num_boot); 25];
+        let mut b_samples: Vec<Vec<f64>> = vec![Vec::with_capacity(num_boot); 25];
+
+        for _ in 0..num_boot {
+            let mut sample = Vec::with_capacity(n);
+            for _ in 0..n {
+                let idx = rand::Rng::gen_range(&mut rng, 0..n);
+                sample.push(pairs[idx]);
+            }
+            let sip_b = Self::fit_from_point_pairs(&sample, order);
+            for p in 0..=order {
+                for q in 0..=order {
+                    if p + q >= 2 && p + q <= order {
+                        a_samples[p * 5 + q].push(sip_b.a[p][q]);
+                        b_samples[p * 5 + q].push(sip_b.b[p][q]);
+                    }
+                }
+            }
+        }
+
+        let mut a_boot_err = [[0.0; 5]; 5];
+        let mut b_boot_err = [[0.0; 5]; 5];
+
+        for p in 0..=order {
+            for q in 0..=order {
+                if p + q >= 2 && p + q <= order {
+                    let idx = p * 5 + q;
+                    let a_vals = &a_samples[idx];
+                    let b_vals = &b_samples[idx];
+                    if !a_vals.is_empty() {
+                        let mean_a: f64 = a_vals.iter().sum::<f64>() / a_vals.len() as f64;
+                        let var_a: f64 = a_vals
+                            .iter()
+                            .map(|v| (v - mean_a).powi(2))
+                            .sum::<f64>()
+                            / a_vals.len() as f64;
+                        a_boot_err[p][q] = var_a.sqrt();
+                    }
+                    if !b_vals.is_empty() {
+                        let mean_b: f64 = b_vals.iter().sum::<f64>() / b_vals.len() as f64;
+                        let var_b: f64 = b_vals
+                            .iter()
+                            .map(|v| (v - mean_b).powi(2))
+                            .sum::<f64>()
+                            / b_vals.len() as f64;
+                        b_boot_err[p][q] = var_b.sqrt();
+                    }
+                }
+            }
+        }
+
+        (a_boot_err, b_boot_err)
+    }
+
+    /// Print individual parameter values and their fit errors cleanly
     pub fn print_fit_results(&self) {
         println!("  SIP Polynomial Order: {}", self.order);
-        println!("  Overall Fit RMSE: {:.4} px", self.fit_rmse_pixels);
-        println!("  Individual Parameter Fit Results & Standard Errors:");
+        println!("  Overall Fit RMSE: {:.3} px", self.fit_rmse_pixels);
+        println!("  Individual Parameter Fit Results & Errors:");
         for p in 0..=self.order {
             for q in 0..=self.order {
                 let deg = p + q;
                 if deg >= 2 && deg <= self.order {
-                    println!(
-                        "    A_{p}_{q}: {:+13.6e} ± {:.6e} (fit error: {:.6e})",
-                        self.a[p][q], self.a_err[p][q], self.a_err[p][q]
-                    );
-                    println!(
-                        "    B_{p}_{q}: {:+13.6e} ± {:.6e} (fit error: {:.6e})",
-                        self.b[p][q], self.b_err[p][q], self.b_err[p][q]
-                    );
+                    if self.a_boot_err[p][q] > 0.0 {
+                        println!(
+                            "    A_{p}_{q}: {:+.2e} ± {:.2e} (boot_err: {:.2e})",
+                            self.a[p][q], self.a_err[p][q], self.a_boot_err[p][q]
+                        );
+                        println!(
+                            "    B_{p}_{q}: {:+.2e} ± {:.2e} (boot_err: {:.2e})",
+                            self.b[p][q], self.b_err[p][q], self.b_boot_err[p][q]
+                        );
+                    } else {
+                        println!(
+                            "    A_{p}_{q}: {:+.2e} ± {:.2e}",
+                            self.a[p][q], self.a_err[p][q]
+                        );
+                        println!(
+                            "    B_{p}_{q}: {:+.2e} ± {:.2e}",
+                            self.b[p][q], self.b_err[p][q]
+                        );
+                    }
                 }
             }
         }
