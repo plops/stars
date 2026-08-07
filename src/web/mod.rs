@@ -761,13 +761,32 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
             `;
 
             // 4. Aberration & Refraction List
+            let sipHtml = '<li><b>SIP Model:</b> Linear (N=1)</li>';
+            if (currentData.solution.sip_distortion) {
+                const sip = currentData.solution.sip_distortion;
+                let coeffStr = '';
+                for (let p = 0; p <= sip.order; p++) {
+                    for (let q = 0; q <= sip.order; q++) {
+                        if (p + q >= 2 && p + q <= sip.order) {
+                            if (sip.a[p][q] !== 0) coeffStr += `A<sub>${p},${q}</sub>=${sip.a[p][q].toExponential(2)} `;
+                            if (sip.b[p][q] !== 0) coeffStr += `B<sub>${p},${q}</sub>=${sip.b[p][q].toExponential(2)} `;
+                        }
+                    }
+                }
+                sipHtml = `
+                    <li><b>SIP Distortion Model:</b> Polynomial Order N = ${sip.order}</li>
+                    <li><b>SIP Coefficients:</b><br><small style="color:var(--accent-yellow);">${coeffStr || 'Negligible'}</small></li>
+                `;
+            }
+
             document.getElementById('aberrationList').innerHTML = `
+                ${sipHtml}
                 <li><b>Radial Distortion (k1):</b> ${currentData.aberration.radial_k1.toFixed(6)}</li>
                 <li><b>Radial Distortion (k2):</b> ${currentData.aberration.radial_k2.toFixed(6)}</li>
                 <li><b>Coma Factor:</b> ${currentData.aberration.coma_factor.toFixed(4)}</li>
                 <li><b>Astigmatism Factor:</b> ${currentData.aberration.astigmatism_factor.toFixed(4)}</li>
                 <li><b>Chromatic Aberration:</b> ${currentData.aberration.chromatic_aberration_px.toFixed(2)} px</li>
-                <li><b>Atmospheric Refraction:</b> ${currentData.aberration.atmospheric_refraction_arcmin.toFixed(2)} arcmin</li>
+                <li><b>Atmospheric Refraction Correction:</b> ${currentData.aberration.atmospheric_refraction_arcmin.toFixed(2)} arcmin</li>
                 <li><b>Max Radial Shift:</b> ${currentData.aberration.max_radial_distortion_px.toFixed(1)} px</li>
                 <li><b>Quality Health Score:</b> ${currentData.aberration.quality_score.toFixed(1)} / 100</li>
             `;

@@ -74,13 +74,14 @@ Serial task list for implementation. Each task should be completed, tested, and 
 
 
 ## Task 7: Integration Tests for Real Images
-- [ ] Add integration test for `/workspace/src/stars.jpg` with EXIF validation
-- [ ] Add integration test for `/workspace/src/IMG_8550.jpg`
-- [ ] Test that plate solving with new catalog finds ≥ 3 matches on real images
-- [ ] Test SIP distortion fitting produces reasonable coefficients
-- [ ] **Test**: `cargo test test_real_image` — both images process without panic
-- [ ] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
-- [ ] **Commit**: `test(integration): add comprehensive real image pipeline tests`
+- [x] Add integration test for `/workspace/src/stars.jpg` with EXIF validation
+- [x] Add integration test for `/workspace/src/IMG_8550.jpg`
+- [x] Test that plate solving with new catalog finds ≥ 3 matches on real images
+- [x] Test SIP distortion fitting produces reasonable coefficients
+- [x] **Test**: `cargo test test_real_image` — both images process without panic
+- [x] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
+- [x] **Commit**: `test(integration): add comprehensive real image pipeline tests`
+
 
 ## Task 8: Web UI Distortion Visualization
 - [ ] Add distortion map overlay rendering to `web/mod.rs`
