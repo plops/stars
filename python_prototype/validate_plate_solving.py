@@ -58,43 +58,69 @@ def extract_location_time(tags):
         print(f"EXIF extract fallback: {e}")
         return 48.137154, 11.576124, "2026-08-05 22:30:00", 180.0
 
-def load_local_catalog(csv_path='/workspace/src/stars/data/bright_stars.csv'):
+def find_file(relative_or_name):
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(base_dir, relative_or_name),
+        os.path.join(base_dir, '..', relative_or_name),
+        os.path.join(base_dir, '../..', relative_or_name),
+        os.path.join('/workspace/src/stars', relative_or_name),
+        os.path.join('/workspace/src', relative_or_name),
+        relative_or_name,
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return os.path.abspath(c)
+    return None
+
+def load_local_catalog():
+    csv_path = find_file('data/bright_stars.csv')
+    if not csv_path:
+        csv_path = find_file('bright_stars.csv')
+
     radecs = []
     names = []
     vmags = []
-    if os.path.exists(csv_path):
+    if csv_path and os.path.exists(csv_path):
         with open(csv_path, 'r') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 radecs.append([float(row['ra_deg']), float(row['dec_deg'])])
                 names.append(row['name'])
                 vmags.append(float(row['vmag']))
+    else:
+        print("Warning: bright_stars.csv catalog file not found!")
+
     return np.array(radecs), names, vmags
 
 print("=== 1. Image Loading & Star Detection (Ground Truth) ===")
-images = ['/workspace/src/stars.jpg', '/workspace/src/IMG_8550.jpg', '/workspace/src/IMG_8556.jpg', '/workspace/src/IMG_8556.HEIC']
+target_names = ['stars.jpg', 'IMG_8550.jpg', 'IMG_8556.jpg', 'IMG_8556.HEIC']
+images = []
+for name in target_names:
+    found = find_file(name)
+    if found:
+        images.append(found)
+    else:
+        print(f"File {name} not found in candidate paths.")
+
 results = {}
 
 for img_path in images:
     print(f"\nProcessing {img_path}")
-    if not os.path.exists(img_path):
-        print(f"File {img_path} not found.")
-        continue
-        
     tags = get_exif_data(img_path)
     lat, lon, dt, heading = extract_location_time(tags)
     print(f"EXIF: Lat={lat:.4f}, Lon={lon:.4f}, Time={dt}, Heading={heading:.1f}°")
-    
+
     img = Image.open(img_path).convert('L')
     data = np.array(img, dtype=float)
-    
+
     mean, median, std = sigma_clipped_stats(data, sigma=3.0)
     daofind = DAOStarFinder(fwhm=3.0, threshold=5.*std)
     sources = daofind(data - median)
-    
+
     n_detected = len(sources) if sources is not None else 0
     print(f"Detected {n_detected} stars using photutils DAOStarFinder.")
-    
+
     plt.figure(figsize=(10, 8))
     plt.imshow(data, cmap='gray', origin='lower', vmin=median-std, vmax=median+5*std)
     if sources is not None:
@@ -106,7 +132,7 @@ for img_path in images:
     plot_path = f'plots/star_detection_{os.path.basename(img_path)}.png'
     plt.savefig(plot_path)
     plt.close()
-    
+
     results[img_path] = {
         'sources': sources,
         'data': data,
@@ -126,18 +152,29 @@ for img_path, res in results.items():
     if res['sources'] is None or len(res['sources']) < 4:
         print("Insufficient stars detected.")
         continue
-    
+
     x_col = 'x_centroid' if 'x_centroid' in res['sources'].colnames else 'xcentroid'
     y_col = 'y_centroid' if 'y_centroid' in res['sources'].colnames else 'ycentroid'
     stars_xy = np.array([res['sources'][x_col], res['sources'][y_col]]).T
-    
+
     if 'peak' in res['sources'].colnames:
         idx = np.argsort(res['sources']['peak'])[::-1]
         stars_xy = stars_xy[idx]
-        
+
     print(f"Top 10 detected star coordinates (px):\n{stars_xy[:10]}")
-    
-    wcs = twirl.compute_wcs(stars_xy[:30], cat_radecs, tolerance=25)
+
+    if len(cat_radecs) == 0:
+        print(f"Catalog empty: Skipping Twirl WCS computation for {img_name}")
+        continue
+
+    # Filter catalog to top 150 brightest stars for fast robust matching
+    if len(cat_vmags) > 0:
+        bright_indices = np.argsort(cat_vmags)[:150]
+        cat_search_radecs = cat_radecs[bright_indices]
+    else:
+        cat_search_radecs = cat_radecs[:150]
+
+    wcs = twirl.compute_wcs(stars_xy[:15], cat_search_radecs, tolerance=25)
     
     if wcs is None:
         print(f"Twirl WCS solving failed for {img_name} with local catalog. Trying Gaia query fallback...")
