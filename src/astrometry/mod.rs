@@ -379,7 +379,8 @@ pub fn solve_plate(
         let mut catalog_quads = Vec::new();
 
         // Project top catalog stars to pixel space to construct catalog 4D quads
-        let projected_cat: Vec<(f64, f64)> = catalog
+        // Sort by visual magnitude (brightest first) to select the most reliable stars
+        let mut projected_cat: Vec<(f64, f64, f64)> = catalog
             .iter()
             .filter_map(|cat| {
                 let (alt, az) = radec_to_altaz(cat.ra_deg, cat.dec_deg, lat_deg, lst);
@@ -392,19 +393,22 @@ pub fn solve_plate(
                     width,
                     height,
                 )
+                .map(|(px, py)| (px, py, cat.vmag))
             })
             .collect();
+        projected_cat.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
 
         if projected_cat.len() >= 4 {
-            for i in 0..projected_cat.len().min(12) {
-                for j in (i + 1)..projected_cat.len().min(12) {
-                    for k in (j + 1)..projected_cat.len().min(12) {
-                        for l in (k + 1)..projected_cat.len().min(12) {
+            let n_top = projected_cat.len().min(12);
+            for i in 0..n_top {
+                for j in (i + 1)..n_top {
+                    for k in (j + 1)..n_top {
+                        for l in (k + 1)..n_top {
                             if let Some(qh) = QuadHash::compute(
-                                projected_cat[i],
-                                projected_cat[j],
-                                projected_cat[k],
-                                projected_cat[l],
+                                (projected_cat[i].0, projected_cat[i].1),
+                                (projected_cat[j].0, projected_cat[j].1),
+                                (projected_cat[k].0, projected_cat[k].1),
+                                (projected_cat[l].0, projected_cat[l].1),
                             ) {
                                 catalog_quads.push(qh);
                                 quad_tree_4d.add(&qh.to_array(), catalog_quads.len() as u64 - 1);
@@ -493,9 +497,12 @@ pub fn solve_plate(
 
     AstrometricSolution {
         center_ra_deg: if !matches.is_empty() {
-            // Compute weighted mean RA from matched catalog stars
-            let ra_sum: f64 = matches.iter().map(|m| m.catalog_ra).sum();
-            (ra_sum / matches.len() as f64 + 360.0) % 360.0
+            // Vector averaging for RA to handle 0°/360° wrap-around correctly
+            let (sin_sum, cos_sum): (f64, f64) = matches
+                .iter()
+                .map(|m| m.catalog_ra.to_radians())
+                .fold((0.0, 0.0), |(s, c), ra| (s + ra.sin(), c + ra.cos()));
+            sin_sum.atan2(cos_sum).to_degrees().rem_euclid(360.0)
         } else {
             (lst - heading_deg + 360.0) % 360.0
         },

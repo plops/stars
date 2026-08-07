@@ -103,9 +103,9 @@ impl SipDistortion {
             let u_cat = u_det;
             let v_cat = v_det;
 
-            // Residual pixel offset
-            let du = m_star.residual_pixels.min(50.0);
-            let dv = m_star.residual_pixels.min(50.0);
+            // Residual pixel offset (directional, not scalar magnitude)
+            let du = m_star.dx_pixels.clamp(-50.0, 50.0);
+            let dv = m_star.dy_pixels.clamp(-50.0, 50.0);
 
             for (j, &(p, q)) in terms.iter().enumerate() {
                 m_mat[(i, j)] = u_cat.powi(p as i32) * v_cat.powi(q as i32);
