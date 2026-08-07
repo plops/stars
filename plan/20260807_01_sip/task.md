@@ -94,19 +94,21 @@ Serial task list for implementation. Each task should be completed, tested, and 
 
 
 ## Task 9: Documentation & Deps Update
-- [ ] Update `deps.md` with any new dependencies (csv crate)
-- [ ] Update `README.md` with SIP feature description
-- [ ] Update `Cargo.toml` dependency versions to latest
-- [ ] Run `cargo update` to refresh lockfile
-- [ ] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
-- [ ] **Validate**: `cargo test` — all tests pass
-- [ ] **Commit**: `docs: update dependencies, README, and deps.md for SIP feature`
+- [x] Update `deps.md` with any new dependencies (csv crate)
+- [x] Update `README.md` with SIP feature description
+- [x] Update `Cargo.toml` dependency versions to latest
+- [x] Run `cargo update` to refresh lockfile
+- [x] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
+- [x] **Validate**: `cargo test` — all tests pass
+- [x] **Commit**: `docs: update dependencies, README, and deps.md for SIP feature`
+
 
 ## Task 10: Write Walkthrough Document
-- [ ] Create `plan/20260807_01_sip/walkthrough.md`
-- [ ] Document what was actually implemented vs planned
-- [ ] List test results and coverage
-- [ ] Document learnings and deviations
-- [ ] List Docker programs needed
-- [ ] List possible extensions
-- [ ] **Commit**: `docs: add walkthrough document summarizing SIP implementation`
+- [x] Create `plan/20260807_01_sip/walkthrough.md`
+- [x] Document what was actually implemented vs planned
+- [x] List test results and coverage
+- [x] Document learnings and deviations
+- [x] List Docker programs needed
+- [x] List possible extensions
+- [x] **Commit**: `docs: add walkthrough document summarizing SIP implementation`
+
