@@ -243,7 +243,11 @@ def run_validation():
         else:
             cat_search_radecs = cat_radecs[:150]
 
-        wcs = twirl.compute_wcs(stars_xy[:15], cat_search_radecs, tolerance=25)
+        try:
+            wcs = twirl.compute_wcs(stars_xy[:15], cat_search_radecs, tolerance=25)
+        except Exception as e:
+            print(f"Twirl compute_wcs exception for {img_name}: {e}")
+            wcs = None
         
         if wcs is None:
             print(f"Twirl WCS solving failed for {img_name} with local catalog. Trying Gaia query fallback...")
