@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct AberrationReport {
     pub radial_k1: f64,
     pub radial_k2: f64,
+    pub radial_fit_rmse_px: f64,
     pub coma_factor: f64,
     pub astigmatism_factor: f64,
     pub chromatic_aberration_px: f64,
@@ -110,9 +111,28 @@ pub fn analyze_aberration(
             + solution.rmse_pixels * 2.5))
         .clamp(10.0, 99.5);
 
+    // Compute radial distortion model fit RMSE
+    let radial_fit_rmse_px = if !solution.matches.is_empty() {
+        let sq_err: f64 = solution
+            .matches
+            .iter()
+            .map(|m| {
+                let dx = m.pixel_x - cx;
+                let dy = m.pixel_y - cy;
+                let norm_r = dx.hypot(dy) / max_radius;
+                let dr_model = (k1 * norm_r.powi(3) + k2 * norm_r.powi(5)) * max_radius;
+                (m.residual_pixels - dr_model).powi(2)
+            })
+            .sum();
+        (sq_err / solution.matches.len() as f64).sqrt()
+    } else {
+        0.0
+    };
+
     AberrationReport {
         radial_k1: k1,
         radial_k2: k2,
+        radial_fit_rmse_px,
         coma_factor,
         astigmatism_factor,
         chromatic_aberration_px,

@@ -773,14 +773,20 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
                         }
                     }
                 }
+                const sipErrBadge = sip.fit_rmse_pixels < 2.0 ? 'badge-green' : (sip.fit_rmse_pixels < 5.0 ? 'badge-yellow' : 'badge-red');
                 sipHtml = `
                     <li><b>SIP Distortion Model:</b> Polynomial Order N = ${sip.order}</li>
+                    <li><b>SIP Fit Error (RMSE):</b> <span class="badge-err ${sipErrBadge}">${sip.fit_rmse_pixels.toFixed(3)} px</span></li>
                     <li><b>SIP Coefficients:</b><br><small style="color:var(--accent-yellow);">${coeffStr || 'Negligible'}</small></li>
                 `;
             }
 
+            const radialErrBadge = currentData.aberration.radial_fit_rmse_px < 2.0 ? 'badge-green' : (currentData.aberration.radial_fit_rmse_px < 5.0 ? 'badge-yellow' : 'badge-red');
+
             document.getElementById('aberrationList').innerHTML = `
                 ${sipHtml}
+                <li><b>Plate Solve Fit Error (RMSE):</b> <span class="badge-err ${badgeClass}">${rmse.toFixed(2)} px</span></li>
+                <li><b>Radial Fit Error (RMSE):</b> <span class="badge-err ${radialErrBadge}">${currentData.aberration.radial_fit_rmse_px.toFixed(3)} px</span></li>
                 <li><b>Radial Distortion (k1):</b> ${currentData.aberration.radial_k1.toFixed(6)}</li>
                 <li><b>Radial Distortion (k2):</b> ${currentData.aberration.radial_k2.toFixed(6)}</li>
                 <li><b>Coma Factor:</b> ${currentData.aberration.coma_factor.toFixed(4)}</li>

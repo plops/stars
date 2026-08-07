@@ -8,6 +8,8 @@ pub struct SipDistortion {
     pub order: usize,
     pub a: [[f64; 5]; 5],
     pub b: [[f64; 5]; 5],
+    #[serde(default)]
+    pub fit_rmse_pixels: f64,
 }
 
 impl Default for SipDistortion {
@@ -16,6 +18,7 @@ impl Default for SipDistortion {
             order: 2,
             a: [[0.0; 5]; 5],
             b: [[0.0; 5]; 5],
+            fit_rmse_pixels: 0.0,
         }
     }
 }
@@ -26,6 +29,7 @@ impl SipDistortion {
             order: order.clamp(2, 4),
             a: [[0.0; 5]; 5],
             b: [[0.0; 5]; 5],
+            fit_rmse_pixels: 0.0,
         }
     }
 
@@ -131,6 +135,19 @@ impl SipDistortion {
             }
         }
 
+        let mut sq_err = 0.0;
+        for m_star in matches {
+            let u_det = m_star.pixel_x - cx;
+            let v_det = m_star.pixel_y - cy;
+            let (pred_u, pred_v) = sip.apply_forward(u_det, v_det);
+            let target_u = u_det + m_star.dx_pixels;
+            let target_v = v_det + m_star.dy_pixels;
+            let du = pred_u - target_u;
+            let dv = pred_v - target_v;
+            sq_err += du * du + dv * dv;
+        }
+        sip.fit_rmse_pixels = (sq_err / matches.len() as f64).sqrt();
+
         sip
     }
 
@@ -188,6 +205,15 @@ impl SipDistortion {
                 sip.b[p][q] = b_sol[j];
             }
         }
+
+        let mut sq_err = 0.0;
+        for &((u, v), (up, vp)) in pairs {
+            let (pred_up, pred_vp) = sip.apply_forward(u, v);
+            let du = pred_up - up;
+            let dv = pred_vp - vp;
+            sq_err += du * du + dv * dv;
+        }
+        sip.fit_rmse_pixels = (sq_err / pairs.len() as f64).sqrt();
 
         sip
     }
@@ -247,6 +273,11 @@ mod tests {
         assert!(
             (a_1_2 - k1).abs() / k1 < 0.10,
             "A_1_2 should recover k1 within 10%, got {a_1_2}"
+        );
+        assert!(
+            sip.fit_rmse_pixels < 0.1,
+            "SIP fit RMSE should be < 0.1 px for synthetic model, got {}",
+            sip.fit_rmse_pixels
         );
     }
 }
