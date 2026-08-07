@@ -255,7 +255,7 @@ pub fn estimate_center_altitude(
                 altaz_to_pixel(alt, az, test_alt, center_az, focal_len_35mm, width, height)
             {
                 let nearest = tree_2d.nearest_one::<kiddo::SquaredEuclidean>(&[px, py]);
-                if nearest.distance.sqrt() < 80.0 {
+                if nearest.distance.sqrt() < 25.0 {
                     let star_idx = nearest.item as usize;
                     if matched_ids.insert(star_idx) {
                         count += 1;
@@ -326,12 +326,13 @@ pub fn solve_plate(
         tree_2d.add(&[star.x, star.y], i as u64);
     }
 
-    let mut matches = Vec::new();
-    let mut sq_err_sum = 0.0;
+    // Pass 1: Coarse match with proper motion propagation and 25px radius limit
+    let mut initial_matches = Vec::new();
     let mut matched_detected_ids = std::collections::HashSet::new();
 
     for cat in &catalog {
-        let (alt, az) = radec_to_altaz(cat.ra_deg, cat.dec_deg, lat_deg, lst);
+        let (ra_epoch, dec_epoch) = cat.position_at_epoch(timestamp_utc);
+        let (alt, az) = radec_to_altaz(ra_epoch, dec_epoch, lat_deg, lst);
         if let Some((proj_x, proj_y)) = altaz_to_pixel(
             alt,
             az,
@@ -345,7 +346,7 @@ pub fn solve_plate(
                 let nearest = tree_2d.nearest_one::<kiddo::SquaredEuclidean>(&[proj_x, proj_y]);
                 let dist = nearest.distance.sqrt();
 
-                if dist < 80.0 {
+                if dist < 25.0 {
                     let star_idx = nearest.item as usize;
                     if !matched_detected_ids.contains(&star_idx) {
                         matched_detected_ids.insert(star_idx);
@@ -353,14 +354,13 @@ pub fn solve_plate(
 
                         let dx = det.x - proj_x;
                         let dy = det.y - proj_y;
-                        sq_err_sum += dist * dist;
-                        matches.push(StarMatch {
+                        initial_matches.push(StarMatch {
                             star_id: det.id,
                             pixel_x: det.x,
                             pixel_y: det.y,
                             catalog_name: cat.name.clone(),
-                            catalog_ra: cat.ra_deg,
-                            catalog_dec: cat.dec_deg,
+                            catalog_ra: ra_epoch,
+                            catalog_dec: dec_epoch,
                             catalog_vmag: cat.vmag,
                             residual_pixels: dist,
                             dx_pixels: dx,
@@ -371,6 +371,36 @@ pub fn solve_plate(
             }
         }
     }
+
+    // Pass 2: Outlier rejection via 3-Sigma clipping
+    let matches = if initial_matches.len() >= 4 {
+        let mean_res: f64 = initial_matches
+            .iter()
+            .map(|m| m.residual_pixels)
+            .sum::<f64>()
+            / initial_matches.len() as f64;
+        let variance: f64 = initial_matches
+            .iter()
+            .map(|m| (m.residual_pixels - mean_res).powi(2))
+            .sum::<f64>()
+            / initial_matches.len() as f64;
+        let std_dev = variance.sqrt();
+
+        let threshold = (mean_res + 2.5 * std_dev).min(18.0);
+        let pruned: Vec<StarMatch> = initial_matches
+            .into_iter()
+            .filter(|m| m.residual_pixels <= threshold)
+            .collect();
+        if pruned.is_empty() {
+            Vec::new()
+        } else {
+            pruned
+        }
+    } else {
+        initial_matches
+    };
+
+    let sq_err_sum: f64 = matches.iter().map(|m| m.residual_pixels.powi(2)).sum();
 
     // 2. Perform Geometric 4D Quad Hashing Verification
     let mut quad_matches = 0;
@@ -383,7 +413,8 @@ pub fn solve_plate(
         let mut projected_cat: Vec<(f64, f64, f64)> = catalog
             .iter()
             .filter_map(|cat| {
-                let (alt, az) = radec_to_altaz(cat.ra_deg, cat.dec_deg, lat_deg, lst);
+                let (ra_epoch, dec_epoch) = cat.position_at_epoch(timestamp_utc);
+                let (alt, az) = radec_to_altaz(ra_epoch, dec_epoch, lat_deg, lst);
                 altaz_to_pixel(
                     alt,
                     az,
@@ -460,7 +491,8 @@ pub fn solve_plate(
     };
 
     let fov_deg = 2.0 * ((18.0 / focal_len_35mm).atan()).to_degrees();
-    let is_solved = matches.len() >= 3 || quad_matches >= 2;
+    let is_solved = (matches.len() >= 4 && rmse < 15.0)
+        || (matches.len() >= 3 && quad_matches >= 1 && rmse < 15.0);
 
     let sip_distortion = if matches.len() >= 4 {
         let cx = width as f64 / 2.0;
@@ -468,7 +500,8 @@ pub fn solve_plate(
         let mut pairs = Vec::new();
         for m in &matches {
             if let Some(cat) = catalog.iter().find(|c| c.name == m.catalog_name) {
-                let (alt, az) = radec_to_altaz(cat.ra_deg, cat.dec_deg, lat_deg, lst);
+                let (ra_epoch, dec_epoch) = cat.position_at_epoch(timestamp_utc);
+                let (alt, az) = radec_to_altaz(ra_epoch, dec_epoch, lat_deg, lst);
                 if let Some((px_cat, py_cat)) = altaz_to_pixel(
                     alt,
                     az,
