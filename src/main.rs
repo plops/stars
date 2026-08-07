@@ -117,11 +117,25 @@ async fn main() -> Result<()> {
             result.solution.rmse_pixels
         );
         println!("EXIF Validation:      {}", result.validation.summary);
-        println!("Radial Distortion k1: {:.6}", result.aberration.radial_k1);
         println!(
-            "Atmospheric Refraction: {:.2} arcmin",
-            result.aberration.atmospheric_refraction_arcmin
+            "Radial Distortion k1: {:.6e} ± {:.6e} (fit error: {:.6e})",
+            result.aberration.radial_k1,
+            result.aberration.radial_k1_err,
+            result.aberration.radial_k1_err
         );
+        println!(
+            "Radial Distortion k2: {:.6e} ± {:.6e} (fit error: {:.6e})",
+            result.aberration.radial_k2,
+            result.aberration.radial_k2_err,
+            result.aberration.radial_k2_err
+        );
+        println!(
+            "Radial Fit RMSE:      {:.3} px",
+            result.aberration.radial_fit_rmse_px
+        );
+        if let Some(sip) = &result.solution.sip_distortion {
+            sip.print_fit_results();
+        }
         println!(
             "Optical Quality Score: {:.1} / 100",
             result.aberration.quality_score

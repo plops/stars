@@ -13,6 +13,74 @@ import astropy.units as u
 from photutils.detection import DAOStarFinder
 from astropy.stats import sigma_clipped_stats
 import twirl
+import lmfit
+
+def fit_radial_distortion_lmfit(norm_r, dr_pixels, max_radius):
+    """
+    Fits radial distortion coefficients k1 and k2 using lmfit and prints fit errors for individual parameters.
+    Model: dr_pixels = (k1 * norm_r^3 + k2 * norm_r^5) * max_radius
+    """
+    def radial_residual(params, r_norm, dr_px):
+        k1 = params['k1'].value
+        k2 = params['k2'].value
+        dr_model = (k1 * (r_norm**3) + k2 * (r_norm**5)) * max_radius
+        return dr_model - dr_px
+
+    params = lmfit.Parameters()
+    params.add('k1', value=0.0)
+    params.add('k2', value=0.0)
+
+    res = lmfit.minimize(radial_residual, params, args=(norm_r, dr_pixels))
+
+    print("\n--- lmfit Radial Distortion Fit Results ---")
+    print(lmfit.fit_report(res))
+    print("\nIndividual Parameter Fit Errors:")
+    param_errors = {}
+    for name, param in res.params.items():
+        stderr_val = param.stderr if param.stderr is not None else 0.0
+        param_errors[name] = (param.value, stderr_val)
+        print(f"  {name}: {param.value:+13.6e} ± {stderr_val:.6e} (fit error: {stderr_val:.6e})")
+
+    return res, param_errors
+
+def fit_sip_distortion_lmfit(u_cat, v_cat, du_data, dv_data, order=3):
+    """
+    Fits 2D SIP polynomial distortion parameters (A_pq, B_pq) using lmfit and prints fit errors for individual parameters.
+    """
+    terms = []
+    params = lmfit.Parameters()
+    for p in range(order + 1):
+        for q in range(order + 1):
+            if 2 <= p + q <= order:
+                terms.append((p, q))
+                params.add(f'A_{p}_{q}', value=0.0)
+                params.add(f'B_{p}_{q}', value=0.0)
+
+    def sip_residual(p_dict):
+        du_pred = np.zeros_like(u_cat)
+        dv_pred = np.zeros_like(v_cat)
+        for (p, q) in terms:
+            a_val = p_dict[f'A_{p}_{q}'].value
+            b_val = p_dict[f'B_{p}_{q}'].value
+            term = (u_cat**p) * (v_cat**q)
+            du_pred += a_val * term
+            dv_pred += b_val * term
+        res_u = du_pred - du_data
+        res_v = dv_pred - dv_data
+        return np.concatenate([res_u, res_v])
+
+    res = lmfit.minimize(sip_residual, params)
+
+    print(f"\n--- lmfit SIP (Order {order}) Distortion Fit Results ---")
+    print(lmfit.fit_report(res))
+    print("\nIndividual Parameter Fit Errors:")
+    param_errors = {}
+    for name, param in res.params.items():
+        stderr_val = param.stderr if param.stderr is not None else 0.0
+        param_errors[name] = (param.value, stderr_val)
+        print(f"  {name}: {param.value:+13.6e} ± {stderr_val:.6e} (fit error: {stderr_val:.6e})")
+
+    return res, param_errors
 
 def ensure_dir(d):
     if not os.path.exists(d):
@@ -93,246 +161,270 @@ def load_local_catalog():
 
     return np.array(radecs), names, vmags
 
-print("=== 1. Image Loading & Star Detection (Ground Truth) ===")
-target_names = ['stars.jpg', 'IMG_8550.jpg', 'IMG_8556.jpg', 'IMG_8556.HEIC']
-images = []
-for name in target_names:
-    found = find_file(name)
-    if found:
-        images.append(found)
-    else:
-        print(f"File {name} not found in candidate paths.")
+def run_validation():
+    print("=== 1. Image Loading & Star Detection (Ground Truth) ===")
+    target_names = ['stars.jpg', 'IMG_8550.jpg', 'IMG_8556.jpg', 'IMG_8556.HEIC']
+    images = []
+    for name in target_names:
+        found = find_file(name)
+        if found:
+            images.append(found)
+        else:
+            print(f"File {name} not found in candidate paths.")
 
-results = {}
+    results = {}
 
-for img_path in images:
-    print(f"\nProcessing {img_path}")
-    tags = get_exif_data(img_path)
-    lat, lon, dt, heading = extract_location_time(tags)
-    print(f"EXIF: Lat={lat:.4f}, Lon={lon:.4f}, Time={dt}, Heading={heading:.1f}°")
+    for img_path in images:
+        print(f"\nProcessing {img_path}")
+        tags = get_exif_data(img_path)
+        lat, lon, dt, heading = extract_location_time(tags)
+        print(f"EXIF: Lat={lat:.4f}, Lon={lon:.4f}, Time={dt}, Heading={heading:.1f}°")
 
-    img = Image.open(img_path).convert('L')
-    data = np.array(img, dtype=float)
+        img = Image.open(img_path).convert('L')
+        data = np.array(img, dtype=float)
 
-    mean, median, std = sigma_clipped_stats(data, sigma=3.0)
-    daofind = DAOStarFinder(fwhm=3.0, threshold=5.*std)
-    sources = daofind(data - median)
+        mean, median, std = sigma_clipped_stats(data, sigma=3.0)
+        daofind = DAOStarFinder(fwhm=3.0, threshold=5.*std)
+        sources = daofind(data - median)
 
-    n_detected = len(sources) if sources is not None else 0
-    print(f"Detected {n_detected} stars using photutils DAOStarFinder.")
+        n_detected = len(sources) if sources is not None else 0
+        print(f"Detected {n_detected} stars using photutils DAOStarFinder.")
 
-    plt.figure(figsize=(10, 8))
-    plt.imshow(data, cmap='gray', origin='lower', vmin=median-std, vmax=median+5*std)
-    if sources is not None:
-        x_col = 'x_centroid' if 'x_centroid' in sources.colnames else 'xcentroid'
-        y_col = 'y_centroid' if 'y_centroid' in sources.colnames else 'ycentroid'
-        plt.scatter(sources[x_col], sources[y_col], facecolors='none', edgecolors='cyan', s=30, label=f'{n_detected} stars')
-    plt.title(f'Detected Stars: {os.path.basename(img_path)}')
-    plt.legend()
-    plot_path = f'plots/star_detection_{os.path.basename(img_path)}.png'
-    plt.savefig(plot_path)
-    plt.close()
+        plt.figure(figsize=(10, 8))
+        plt.imshow(data, cmap='gray', origin='lower', vmin=median-std, vmax=median+5*std)
+        if sources is not None:
+            x_col = 'x_centroid' if 'x_centroid' in sources.colnames else 'xcentroid'
+            y_col = 'y_centroid' if 'y_centroid' in sources.colnames else 'ycentroid'
+            plt.scatter(sources[x_col], sources[y_col], facecolors='none', edgecolors='cyan', s=30, label=f'{n_detected} stars')
+        plt.title(f'Detected Stars: {os.path.basename(img_path)}')
+        plt.legend()
+        plot_path = f'plots/star_detection_{os.path.basename(img_path)}.png'
+        plt.savefig(plot_path)
+        plt.close()
 
-    results[img_path] = {
-        'sources': sources,
-        'data': data,
-        'lat': lat, 'lon': lon, 'dt': dt, 'heading': heading,
-        'shape': data.shape
-    }
-
-print("\n=== 2. Catalog Loading & Twirl Plate Solving ===")
-cat_radecs, cat_names, cat_vmags = load_local_catalog()
-print(f"Loaded {len(cat_radecs)} stars from local Hipparcos/bright star catalog.")
-
-twirl_results = {}
-
-for img_path, res in results.items():
-    img_name = os.path.basename(img_path)
-    print(f"\n--- Running Twirl Plate Solving for {img_name} ---")
-    if res['sources'] is None or len(res['sources']) < 4:
-        print("Insufficient stars detected.")
-        continue
-
-    x_col = 'x_centroid' if 'x_centroid' in res['sources'].colnames else 'xcentroid'
-    y_col = 'y_centroid' if 'y_centroid' in res['sources'].colnames else 'ycentroid'
-    stars_xy = np.array([res['sources'][x_col], res['sources'][y_col]]).T
-
-    if 'peak' in res['sources'].colnames:
-        idx = np.argsort(res['sources']['peak'])[::-1]
-        stars_xy = stars_xy[idx]
-
-    print(f"Top 10 detected star coordinates (px):\n{stars_xy[:10]}")
-
-    if len(cat_radecs) == 0:
-        print(f"Catalog empty: Skipping Twirl WCS computation for {img_name}")
-        continue
-
-    # Filter catalog to top 150 brightest stars for fast robust matching
-    if len(cat_vmags) > 0:
-        bright_indices = np.argsort(cat_vmags)[:150]
-        cat_search_radecs = cat_radecs[bright_indices]
-    else:
-        cat_search_radecs = cat_radecs[:150]
-
-    wcs = twirl.compute_wcs(stars_xy[:15], cat_search_radecs, tolerance=25)
-    
-    if wcs is None:
-        print(f"Twirl WCS solving failed for {img_name} with local catalog. Trying Gaia query fallback...")
-        # Fallback to Gaia cone query if available
-        hints = {
-            'stars.jpg': SkyCoord(335.0, 42.0, unit='deg'),
-            'IMG_8550.jpg': SkyCoord(307.0, 43.0, unit='deg')
+        results[img_path] = {
+            'sources': sources,
+            'data': data,
+            'lat': lat, 'lon': lon, 'dt': dt, 'heading': heading,
+            'shape': data.shape
         }
-        hint_coord = hints.get(img_name, SkyCoord(320.0, 40.0, unit='deg'))
-        try:
-            gaia_radecs = twirl.gaia_radecs(hint_coord, 45.0, limit=300)
-            wcs = twirl.compute_wcs(stars_xy[:30], gaia_radecs, tolerance=25)
-            radecs_used = gaia_radecs
-        except Exception as e:
-            print(f"Gaia query failed: {e}")
+
+    print("\n=== 2. Catalog Loading & Twirl Plate Solving ===")
+    cat_radecs, cat_names, cat_vmags = load_local_catalog()
+    print(f"Loaded {len(cat_radecs)} stars from local Hipparcos/bright star catalog.")
+
+    twirl_results = {}
+
+    for img_path, res in results.items():
+        img_name = os.path.basename(img_path)
+        print(f"\n--- Running Twirl Plate Solving for {img_name} ---")
+        if res['sources'] is None or len(res['sources']) < 4:
+            print("Insufficient stars detected.")
+            continue
+
+        x_col = 'x_centroid' if 'x_centroid' in res['sources'].colnames else 'xcentroid'
+        y_col = 'y_centroid' if 'y_centroid' in res['sources'].colnames else 'ycentroid'
+        stars_xy = np.array([res['sources'][x_col], res['sources'][y_col]]).T
+
+        if 'peak' in res['sources'].colnames:
+            idx = np.argsort(res['sources']['peak'])[::-1]
+            stars_xy = stars_xy[idx]
+
+        print(f"Top 10 detected star coordinates (px):\n{stars_xy[:10]}")
+
+        if len(cat_radecs) == 0:
+            print(f"Catalog empty: Skipping Twirl WCS computation for {img_name}")
+            continue
+
+        # Filter catalog to top 150 brightest stars for fast robust matching
+        if len(cat_vmags) > 0:
+            bright_indices = np.argsort(cat_vmags)[:150]
+            cat_search_radecs = cat_radecs[bright_indices]
+        else:
+            cat_search_radecs = cat_radecs[:150]
+
+        wcs = twirl.compute_wcs(stars_xy[:15], cat_search_radecs, tolerance=25)
+        
+        if wcs is None:
+            print(f"Twirl WCS solving failed for {img_name} with local catalog. Trying Gaia query fallback...")
+            # Fallback to Gaia cone query if available
+            hints = {
+                'stars.jpg': SkyCoord(335.0, 42.0, unit='deg'),
+                'IMG_8550.jpg': SkyCoord(307.0, 43.0, unit='deg')
+            }
+            hint_coord = hints.get(img_name, SkyCoord(320.0, 40.0, unit='deg'))
+            try:
+                gaia_radecs = twirl.gaia_radecs(hint_coord, 45.0, limit=300)
+                wcs = twirl.compute_wcs(stars_xy[:30], gaia_radecs, tolerance=25)
+                radecs_used = gaia_radecs
+            except Exception as e:
+                print(f"Gaia query failed: {e}")
+                radecs_used = cat_radecs
+        else:
             radecs_used = cat_radecs
-    else:
-        radecs_used = cat_radecs
-        
-    if wcs is None:
-        print(f"FAILED to solve WCS for {img_name}")
-        continue
-        
-    crval_ra, crval_dec = wcs.wcs.crval
-    print(f"SUCCESS: Twirl WCS Solved!")
-    print(f"  Center RA:  {crval_ra:.4f}°")
-    print(f"  Center Dec: {crval_dec:.4f}°")
-    
-    # Calculate pixel scale and FOV
-    if hasattr(wcs.wcs, 'cd') and wcs.wcs.cd is not None:
-        cd = wcs.wcs.cd
-        scale_deg = np.sqrt(np.abs(np.linalg.det(cd)))
-    elif hasattr(wcs.wcs, 'cdelt') and wcs.wcs.cdelt[0] != 0:
-        scale_deg = np.abs(wcs.wcs.cdelt[0])
-    else:
-        scale_deg = 0.02 # fallback ~72 arcsec/px
-        
-    scale_arcsec = scale_deg * 3600.0
-    height, width = res['shape']
-    fov_x_deg = width * scale_deg
-    fov_y_deg = height * scale_deg
-    print(f"  Pixel Scale: {scale_arcsec:.2f} arcsec/pixel ({scale_deg:.5f} deg/px)")
-    print(f"  Calculated FOV: {fov_x_deg:.2f}° x {fov_y_deg:.2f}°")
-    
-    # Project catalog stars into image pixels
-    cat_pixels = np.array(wcs.world_to_pixel_values(radecs_used))
-    
-    # Match detected stars to catalog positions
-    match_threshold_px = 25.0
-    matched_pairs = []
-    dx_list = []
-    dy_list = []
-    dist_list = []
-    cat_matched_xy = []
-    det_matched_xy = []
-    
-    for s_xy in stars_xy:
-        dists = np.linalg.norm(cat_pixels - s_xy, axis=1)
-        min_idx = np.argmin(dists)
-        min_dist = dists[min_idx]
-        if min_dist <= match_threshold_px:
-            cat_xy = cat_pixels[min_idx]
-            dx = s_xy[0] - cat_xy[0]
-            dy = s_xy[1] - cat_xy[1]
-            dx_list.append(dx)
-            dy_list.append(dy)
-            dist_list.append(min_dist)
-            det_matched_xy.append(s_xy)
-            cat_matched_xy.append(cat_xy)
-            matched_pairs.append((s_xy, cat_xy, min_dist))
             
-    matched_count = len(matched_pairs)
-    rmse_px = np.sqrt(np.mean(np.array(dist_list)**2)) if matched_count > 0 else 0.0
-    mean_dx = np.mean(dx_list) if dx_list else 0.0
-    mean_dy = np.mean(dy_list) if dy_list else 0.0
-    
-    print(f"  Matched Stars: {matched_count}")
-    print(f"  Residual RMSE: {rmse_px:.2f} px")
-    print(f"  Mean dx: {mean_dx:+.2f} px, Mean dy: {mean_dy:+.2f} px")
-    
-    # === Diagnostic Plotting ===
-    # 1. Overlay Plot: Image + Detected Stars + Twirl Catalog Stars
-    plt.figure(figsize=(12, 9))
-    plt.imshow(res['data'], cmap='gray', origin='lower',
-               vmin=np.median(res['data'])-np.std(res['data']),
-               vmax=np.median(res['data'])+5*np.std(res['data']))
-    
-    plt.scatter(stars_xy[:, 0], stars_xy[:, 1], facecolors='none', edgecolors='cyan',
-                s=40, label=f'Detected Stars ({len(stars_xy)})')
-    
-    if len(cat_matched_xy) > 0:
-        cat_matched_xy = np.array(cat_matched_xy)
-        plt.scatter(cat_matched_xy[:, 0], cat_matched_xy[:, 1], color='red', marker='+',
-                    s=60, label=f'Twirl Solved Stars ({matched_count})')
+        if wcs is None:
+            print(f"FAILED to solve WCS for {img_name}")
+            continue
+            
+        crval_ra, crval_dec = wcs.wcs.crval
+        print(f"SUCCESS: Twirl WCS Solved!")
+        print(f"  Center RA:  {crval_ra:.4f}°")
+        print(f"  Center Dec: {crval_dec:.4f}°")
         
-    plt.title(f'Twirl WCS Fit Overlay: {img_name}\nCenter: RA={crval_ra:.2f}°, Dec={crval_dec:.2f}° | RMSE={rmse_px:.2f}px')
-    plt.legend(loc='upper right')
-    plot_fit_path = f'plots/twirl_fit_{img_name}.png'
-    plt.savefig(plot_fit_path, bbox_inches='tight')
-    plt.close()
-    
-    # 2. Residuals Plot: 2D Scatter + Radial Drift
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-    
-    if matched_count > 0:
-        ax1.scatter(dx_list, dy_list, color='blue', alpha=0.7, edgecolors='k')
-        ax1.axhline(0, color='gray', linestyle='--', linewidth=0.8)
-        ax1.axvline(0, color='gray', linestyle='--', linewidth=0.8)
-        ax1.set_xlabel('dx Residual (px)')
-        ax1.set_ylabel('dy Residual (px)')
-        ax1.set_title(f'2D Residual Distribution\n(Mean dx={mean_dx:+.2f}px, dy={mean_dy:+.2f}px)')
-        ax1.grid(True, linestyle=':', alpha=0.6)
+        # Calculate pixel scale and FOV
+        if hasattr(wcs.wcs, 'cd') and wcs.wcs.cd is not None:
+            cd = wcs.wcs.cd
+            scale_deg = np.sqrt(np.abs(np.linalg.det(cd)))
+        elif hasattr(wcs.wcs, 'cdelt') and wcs.wcs.cdelt[0] != 0:
+            scale_deg = np.abs(wcs.wcs.cdelt[0])
+        else:
+            scale_deg = 0.02 # fallback ~72 arcsec/px
+            
+        scale_arcsec = scale_deg * 3600.0
+        height, width = res['shape']
+        fov_x_deg = width * scale_deg
+        fov_y_deg = height * scale_deg
+        print(f"  Pixel Scale: {scale_arcsec:.2f} arcsec/pixel ({scale_deg:.5f} deg/px)")
+        print(f"  Calculated FOV: {fov_x_deg:.2f}° x {fov_y_deg:.2f}°")
         
-        center_x, center_y = width / 2.0, height / 2.0
-        r_dist = [np.hypot(p[0][0] - center_x, p[0][1] - center_y) for p in matched_pairs]
+        # Project catalog stars into image pixels
+        cat_pixels = np.array(wcs.world_to_pixel_values(radecs_used))
         
-        ax2.scatter(r_dist, dist_list, color='crimson', alpha=0.7, edgecolors='k')
-        ax2.set_xlabel('Distance from Image Center (px)')
-        ax2.set_ylabel('Residual Magnitude (px)')
-        ax2.set_title(f'Radial Distortion Profile\n(Overall RMSE = {rmse_px:.2f}px)')
-        ax2.grid(True, linestyle=':', alpha=0.6)
-    else:
-        ax1.text(0.5, 0.5, 'No Star Matches', ha='center', va='center')
-        ax2.text(0.5, 0.5, 'No Star Matches', ha='center', va='center')
+        # Match detected stars to catalog positions
+        match_threshold_px = 25.0
+        matched_pairs = []
+        dx_list = []
+        dy_list = []
+        dist_list = []
+        cat_matched_xy = []
+        det_matched_xy = []
         
-    plt.suptitle(f'Twirl Astrometric Fit Residuals: {img_name}')
-    plot_res_path = f'plots/twirl_residuals_{img_name}.png'
-    plt.savefig(plot_res_path, bbox_inches='tight')
-    plt.close()
-    
-    twirl_results[img_path] = {
-        'solved': True,
-        'crval_ra': crval_ra,
-        'crval_dec': crval_dec,
-        'scale_arcsec': scale_arcsec,
-        'fov_x_deg': fov_x_deg,
-        'fov_y_deg': fov_y_deg,
-        'matched_count': matched_count,
-        'rmse_px': rmse_px,
-        'mean_dx': mean_dx,
-        'mean_dy': mean_dy,
-        'fit_plot': plot_fit_path,
-        'res_plot': plot_res_path
-    }
+        for s_xy in stars_xy:
+            dists = np.linalg.norm(cat_pixels - s_xy, axis=1)
+            min_idx = np.argmin(dists)
+            min_dist = dists[min_idx]
+            if min_dist <= match_threshold_px:
+                cat_xy = cat_pixels[min_idx]
+                dx = s_xy[0] - cat_xy[0]
+                dy = s_xy[1] - cat_xy[1]
+                dx_list.append(dx)
+                dy_list.append(dy)
+                dist_list.append(min_dist)
+                det_matched_xy.append(s_xy)
+                cat_matched_xy.append(cat_xy)
+                matched_pairs.append((s_xy, cat_xy, min_dist))
+                
+        matched_count = len(matched_pairs)
+        rmse_px = np.sqrt(np.mean(np.array(dist_list)**2)) if matched_count > 0 else 0.0
+        mean_dx = np.mean(dx_list) if dx_list else 0.0
+        mean_dy = np.mean(dy_list) if dy_list else 0.0
+        
+        print(f"  Matched Stars: {matched_count}")
+        print(f"  Residual RMSE: {rmse_px:.2f} px")
+        print(f"  Mean dx: {mean_dx:+.2f} px, Mean dy: {mean_dy:+.2f} px")
+        
+        if matched_count > 3:
+            center_x, center_y = width / 2.0, height / 2.0
+            max_radius = np.hypot(center_x, center_y)
+            det_arr = np.array(det_matched_xy)
+            cat_arr = np.array(cat_matched_xy)
+            
+            u_det = det_arr[:, 0] - center_x
+            v_det = det_arr[:, 1] - center_y
+            u_cat = cat_arr[:, 0] - center_x
+            v_cat = cat_arr[:, 1] - center_y
+            
+            du_data = np.array(dx_list)
+            dv_data = np.array(dy_list)
+            
+            norm_r = np.hypot(u_det, v_det) / max_radius
+            dr_pixels = np.array(dist_list)
+            
+            print(f"\n--- lmfit Distortion Parameter Fitting for {img_name} ---")
+            fit_radial_distortion_lmfit(norm_r, dr_pixels, max_radius)
+            fit_sip_distortion_lmfit(u_cat, v_cat, du_data, dv_data, order=3)
+        
+        # === Diagnostic Plotting ===
+        # 1. Overlay Plot: Image + Detected Stars + Twirl Catalog Stars
+        plt.figure(figsize=(12, 9))
+        plt.imshow(res['data'], cmap='gray', origin='lower',
+                   vmin=np.median(res['data'])-np.std(res['data']),
+                   vmax=np.median(res['data'])+5*np.std(res['data']))
+        
+        plt.scatter(stars_xy[:, 0], stars_xy[:, 1], facecolors='none', edgecolors='cyan',
+                    s=40, label=f'Detected Stars ({len(stars_xy)})')
+        
+        if len(cat_matched_xy) > 0:
+            cat_matched_xy = np.array(cat_matched_xy)
+            plt.scatter(cat_matched_xy[:, 0], cat_matched_xy[:, 1], color='red', marker='+',
+                        s=60, label=f'Twirl Solved Stars ({matched_count})')
+            
+        plt.title(f'Twirl WCS Fit Overlay: {img_name}\nCenter: RA={crval_ra:.2f}°, Dec={crval_dec:.2f}° | RMSE={rmse_px:.2f}px')
+        plt.legend(loc='upper right')
+        plot_fit_path = f'plots/twirl_fit_{img_name}.png'
+        plt.savefig(plot_fit_path, bbox_inches='tight')
+        plt.close()
+        
+        # 2. Residuals Plot: 2D Scatter + Radial Drift
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+        
+        if matched_count > 0:
+            ax1.scatter(dx_list, dy_list, color='blue', alpha=0.7, edgecolors='k')
+            ax1.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+            ax1.axvline(0, color='gray', linestyle='--', linewidth=0.8)
+            ax1.set_xlabel('dx Residual (px)')
+            ax1.set_ylabel('dy Residual (px)')
+            ax1.set_title(f'2D Residual Distribution\n(Mean dx={mean_dx:+.2f}px, dy={mean_dy:+.2f}px)')
+            ax1.grid(True, linestyle=':', alpha=0.6)
+            
+            center_x, center_y = width / 2.0, height / 2.0
+            r_dist = [np.hypot(p[0][0] - center_x, p[0][1] - center_y) for p in matched_pairs]
+            
+            ax2.scatter(r_dist, dist_list, color='crimson', alpha=0.7, edgecolors='k')
+            ax2.set_xlabel('Distance from Image Center (px)')
+            ax2.set_ylabel('Residual Magnitude (px)')
+            ax2.set_title(f'Radial Distortion Profile\n(Overall RMSE = {rmse_px:.2f}px)')
+            ax2.grid(True, linestyle=':', alpha=0.6)
+        else:
+            ax1.text(0.5, 0.5, 'No Star Matches', ha='center', va='center')
+            ax2.text(0.5, 0.5, 'No Star Matches', ha='center', va='center')
+            
+        plt.suptitle(f'Twirl Astrometric Fit Residuals: {img_name}')
+        plot_res_path = f'plots/twirl_residuals_{img_name}.png'
+        plt.savefig(plot_res_path, bbox_inches='tight')
+        plt.close()
+        
+        twirl_results[img_path] = {
+            'solved': True,
+            'crval_ra': crval_ra,
+            'crval_dec': crval_dec,
+            'scale_arcsec': scale_arcsec,
+            'fov_x_deg': fov_x_deg,
+            'fov_y_deg': fov_y_deg,
+            'matched_count': matched_count,
+            'rmse_px': rmse_px,
+            'mean_dx': mean_dx,
+            'mean_dy': mean_dy,
+            'fit_plot': plot_fit_path,
+            'res_plot': plot_res_path
+        }
 
-print("\n========================================================")
-print("✦ TWIRL ASTROMETRIC PLATE SOLVING SUMMARY ✦")
-print("========================================================")
-for img_path, res in twirl_results.items():
-    name = os.path.basename(img_path)
-    print(f"\nImage:              {name}")
-    print(f"WCS Status:         {'SOLVED' if res['solved'] else 'FAILED'}")
-    print(f"Center Sky Pos:     RA = {res['crval_ra']:.4f}°, Dec = {res['crval_dec']:.4f}°")
-    print(f"Pixel Scale:        {res['scale_arcsec']:.2f} arcsec/px")
-    print(f"Field of View:      {res['fov_x_deg']:.2f}° x {res['fov_y_deg']:.2f}°")
-    print(f"Matched Catalog:    {res['matched_count']} stars")
-    print(f"Residual Error:     RMSE = {res['rmse_px']:.2f} px (dx={res['mean_dx']:+.2f}px, dy={res['mean_dy']:+.2f}px)")
-    print(f"Diagnostic Plots:   {res['fit_plot']}, {res['res_plot']}")
+    print("\n========================================================")
+    print("✦ TWIRL ASTROMETRIC PLATE SOLVING SUMMARY ✦")
+    print("========================================================")
+    for img_path, res in twirl_results.items():
+        name = os.path.basename(img_path)
+        print(f"\nImage:              {name}")
+        print(f"WCS Status:         {'SOLVED' if res['solved'] else 'FAILED'}")
+        print(f"Center Sky Pos:     RA = {res['crval_ra']:.4f}°, Dec = {res['crval_dec']:.4f}°")
+        print(f"Pixel Scale:        {res['scale_arcsec']:.2f} arcsec/px")
+        print(f"Field of View:      {res['fov_x_deg']:.2f}° x {res['fov_y_deg']:.2f}°")
+        print(f"Matched Catalog:    {res['matched_count']} stars")
+        print(f"Residual Error:     RMSE = {res['rmse_px']:.2f} px (dx={res['mean_dx']:+.2f}px, dy={res['mean_dy']:+.2f}px)")
+        print(f"Diagnostic Plots:   {res['fit_plot']}, {res['res_plot']}")
 
-print("\nGround truth evaluation and twirl fitting complete. Plots saved to plots/.")
+    print("\nGround truth evaluation and twirl fitting complete. Plots saved to plots/.")
 
+if __name__ == "__main__":
+    run_validation()

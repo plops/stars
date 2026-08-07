@@ -9,6 +9,10 @@ pub struct SipDistortion {
     pub a: [[f64; 5]; 5],
     pub b: [[f64; 5]; 5],
     #[serde(default)]
+    pub a_err: [[f64; 5]; 5],
+    #[serde(default)]
+    pub b_err: [[f64; 5]; 5],
+    #[serde(default)]
     pub fit_rmse_pixels: f64,
 }
 
@@ -18,6 +22,8 @@ impl Default for SipDistortion {
             order: 2,
             a: [[0.0; 5]; 5],
             b: [[0.0; 5]; 5],
+            a_err: [[0.0; 5]; 5],
+            b_err: [[0.0; 5]; 5],
             fit_rmse_pixels: 0.0,
         }
     }
@@ -29,6 +35,8 @@ impl SipDistortion {
             order: order.clamp(2, 4),
             a: [[0.0; 5]; 5],
             b: [[0.0; 5]; 5],
+            a_err: [[0.0; 5]; 5],
+            b_err: [[0.0; 5]; 5],
             fit_rmse_pixels: 0.0,
         }
     }
@@ -129,13 +137,14 @@ impl SipDistortion {
             }
         }
 
-        if let Some(b_sol) = mtm.qr().solve(&mt_dv) {
+        if let Some(b_sol) = mtm.clone().qr().solve(&mt_dv) {
             for (j, &(p, q)) in terms.iter().enumerate() {
                 sip.b[p][q] = b_sol[j];
             }
         }
 
-        let mut sq_err = 0.0;
+        let mut sq_err_u = 0.0;
+        let mut sq_err_v = 0.0;
         for m_star in matches {
             let u_det = m_star.pixel_x - cx;
             let v_det = m_star.pixel_y - cy;
@@ -144,9 +153,25 @@ impl SipDistortion {
             let target_v = v_det + m_star.dy_pixels;
             let du = pred_u - target_u;
             let dv = pred_v - target_v;
-            sq_err += du * du + dv * dv;
+            sq_err_u += du * du;
+            sq_err_v += dv * dv;
         }
-        sip.fit_rmse_pixels = (sq_err / matches.len() as f64).sqrt();
+
+        let dof = (num_matches as f64 - num_terms as f64).max(1.0);
+        let var_u = sq_err_u / dof;
+        let var_v = sq_err_v / dof;
+
+        if let Some(mtm_inv) = mtm.try_inverse() {
+            for (j, &(p, q)) in terms.iter().enumerate() {
+                let diag = mtm_inv[(j, j)];
+                if diag > 0.0 {
+                    sip.a_err[p][q] = (var_u * diag).sqrt();
+                    sip.b_err[p][q] = (var_v * diag).sqrt();
+                }
+            }
+        }
+
+        sip.fit_rmse_pixels = ((sq_err_u + sq_err_v) / matches.len() as f64).sqrt();
 
         sip
     }
@@ -200,22 +225,61 @@ impl SipDistortion {
             }
         }
 
-        if let Some(b_sol) = mtm.qr().solve(&mt_dv) {
+        if let Some(b_sol) = mtm.clone().qr().solve(&mt_dv) {
             for (j, &(p, q)) in terms.iter().enumerate() {
                 sip.b[p][q] = b_sol[j];
             }
         }
 
-        let mut sq_err = 0.0;
+        let mut sq_err_u = 0.0;
+        let mut sq_err_v = 0.0;
         for &((u, v), (up, vp)) in pairs {
             let (pred_up, pred_vp) = sip.apply_forward(u, v);
             let du = pred_up - up;
             let dv = pred_vp - vp;
-            sq_err += du * du + dv * dv;
+            sq_err_u += du * du;
+            sq_err_v += dv * dv;
         }
-        sip.fit_rmse_pixels = (sq_err / pairs.len() as f64).sqrt();
+
+        let dof = (num_pairs as f64 - num_terms as f64).max(1.0);
+        let var_u = sq_err_u / dof;
+        let var_v = sq_err_v / dof;
+
+        if let Some(mtm_inv) = mtm.try_inverse() {
+            for (j, &(p, q)) in terms.iter().enumerate() {
+                let diag = mtm_inv[(j, j)];
+                if diag > 0.0 {
+                    sip.a_err[p][q] = (var_u * diag).sqrt();
+                    sip.b_err[p][q] = (var_v * diag).sqrt();
+                }
+            }
+        }
+
+        sip.fit_rmse_pixels = ((sq_err_u + sq_err_v) / pairs.len() as f64).sqrt();
 
         sip
+    }
+
+    /// Print individual parameter values and their fit errors
+    pub fn print_fit_results(&self) {
+        println!("  SIP Polynomial Order: {}", self.order);
+        println!("  Overall Fit RMSE: {:.4} px", self.fit_rmse_pixels);
+        println!("  Individual Parameter Fit Results & Standard Errors:");
+        for p in 0..=self.order {
+            for q in 0..=self.order {
+                let deg = p + q;
+                if deg >= 2 && deg <= self.order {
+                    println!(
+                        "    A_{p}_{q}: {:+13.6e} ± {:.6e} (fit error: {:.6e})",
+                        self.a[p][q], self.a_err[p][q], self.a_err[p][q]
+                    );
+                    println!(
+                        "    B_{p}_{q}: {:+13.6e} ± {:.6e} (fit error: {:.6e})",
+                        self.b[p][q], self.b_err[p][q], self.b_err[p][q]
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -279,5 +343,24 @@ mod tests {
             "SIP fit RMSE should be < 0.1 px for synthetic model, got {}",
             sip.fit_rmse_pixels
         );
+    }
+
+    #[test]
+    fn test_sip_fit_errors() {
+        let mut pairs = Vec::new();
+        for x in (-300..=300).step_by(40) {
+            for y in (-300..=300).step_by(40) {
+                let u = x as f64;
+                let v = y as f64;
+                let up = u + 1e-5 * u * u;
+                let vp = v + 2e-5 * v * v;
+                pairs.push(((u, v), (up, vp)));
+            }
+        }
+        let sip = SipDistortion::fit_from_point_pairs(&pairs, 2);
+        assert!(sip.a_err[2][0] >= 0.0);
+        assert!(sip.b_err[0][2] >= 0.0);
+        assert!(!sip.a_err[2][0].is_nan());
+        assert!(!sip.b_err[0][2].is_nan());
     }
 }
