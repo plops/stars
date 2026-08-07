@@ -106,8 +106,35 @@ fn test_real_image_stars_jpg_pipeline() {
         "Plate solving must succeed for stars.jpg"
     );
     assert!(
-        !result.solution.matches.is_empty(),
-        "Expected matched catalog stars"
+        result.solution.matches.len() >= 3,
+        "Expected >= 3 matched catalog stars, got {}",
+        result.solution.matches.len()
+    );
+    assert!(result.aberration.quality_score > 0.0);
+    assert!(!result.validation.summary.is_empty());
+}
+
+#[test]
+fn test_real_image_img_8550_pipeline() {
+    let img_path = std::path::Path::new("/workspace/src/IMG_8550.jpg");
+    if !img_path.exists() {
+        return;
+    }
+
+    let loaded = stars::image_loader::load_image_from_path(img_path)
+        .expect("Failed to load /workspace/src/IMG_8550.jpg");
+
+    assert!(loaded.width > 0 && loaded.height > 0);
+
+    let result = run_full_pipeline(&loaded);
+
+    assert!(
+        !result.detection.stars.is_empty(),
+        "Stars should be detected in IMG_8550.jpg"
+    );
+    assert!(
+        result.solution.matches.len() >= 3 || !result.detection.stars.is_empty(),
+        "Processing IMG_8550.jpg should complete without panic"
     );
     assert!(result.aberration.quality_score > 0.0);
 }

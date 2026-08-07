@@ -65,12 +65,13 @@ Serial task list for implementation. Each task should be completed, tested, and 
 
 
 ## Task 6: Update Satellite TLE Data
-- [ ] Replace hardcoded 2020-epoch TLEs with 2026-epoch data
-- [ ] Add `fetch_tle()` stub function with fallback to embedded data
-- [ ] Document that TLEs should be periodically updated
-- [ ] **Test**: `cargo test test_satellite_streak_detection` — existing test passes with updated TLEs
-- [ ] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
-- [ ] **Commit**: `fix(satellites): update stale 2020-epoch TLE data to current epoch`
+- [x] Replace hardcoded 2020-epoch TLEs with 2026-epoch data
+- [x] Add `fetch_tle()` stub function with fallback to embedded data
+- [x] Document that TLEs should be periodically updated
+- [x] **Test**: `cargo test test_satellite_streak_detection` — existing test passes with updated TLEs
+- [x] **Validate**: `cargo clippy -- -W clippy::all && cargo fmt -- --check`
+- [x] **Commit**: `fix(satellites): update stale 2020-epoch TLE data to current epoch`
+
 
 ## Task 7: Integration Tests for Real Images
 - [ ] Add integration test for `/workspace/src/stars.jpg` with EXIF validation
